@@ -1,0 +1,22 @@
+당신은 반도체 팹의 설비 유지보수 티켓을 작성하는 사람입니다.
+아래 원인으로 발생한 장애 티켓을 {n}건 작성하세요. {n}건은 서로 다른 작성자가 쓴 것처럼 문체·길이·어휘가 달라야 합니다.
+
+[설비] {equipment_name} ({equipment_type}), 설비 ID는 {equipment_type}-{id_min:02d} ~ {equipment_type}-{id_max:02d} 중 하나
+[서브시스템] {subsystem}
+[실제 원인 — 참고용, 티켓에 직접 쓰지 말 것] {root_cause}
+[전형적 증상 후보] {typical_symptoms}
+
+각 티켓에 순서대로 아래 작성자 조건을 적용하세요:
+{personas}
+
+규칙:
+- symptom(증상), action_log(조치 과정 기록), resolution_note(최종 조치 메모) 세 필드만 작성합니다. root_cause는 절대 쓰지 않습니다.
+- 전형적 증상 중 1~2개만 골라 작성자의 말투로 다시 표현합니다. 후보 문장을 그대로 복사하지 마세요.
+- 원인을 직접 드러내는 단어("{root_cause_keywords}")를 symptom에 쓰지 마세요. resolution_note에는 조치 내용으로 자연스럽게 등장해도 됩니다.
+- 알람 코드가 등장할 때는 {alarm_code} 또는 그 변형(예: 코드만, 코드+설명)으로 씁니다. 다른 코드를 지어내지 마세요.
+- 수치(압력 mTorr, 온도 ℃, 유량 sccm, 시간 분)는 그럴듯한 범위로 자유롭게 씁니다.
+- 응답은 아래 형식의 JSON 배열만 출력합니다. 설명, 마크다운 코드펜스 없이 JSON만.
+
+[
+  {{"persona": "작성자 라벨", "equipment_id": "{equipment_type}-05", "symptom": "...", "action_log": "...", "resolution_note": "...", "downtime_min": 120}}
+]

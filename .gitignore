@@ -1,0 +1,7 @@
+.env
+.qdrant/
+__pycache__/
+*.pyc
+.venv/
+domains/*/data/*.jsonl
+domains/*/eval/failures_*.md
