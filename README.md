@@ -38,7 +38,7 @@ flowchart LR
 
 <!-- 각 3줄 이내. docs/log/ 의 "결정" 칸에서 가져온다. -->
 - **RabbitMQ (Kafka 대신)** — 작업 큐 문제이고 DLQ·재시도가 내장. 처리량이 아니라 공정 분배와 유실 방지가 요구사항.
-- **원인 카탈로그 → 합성 티켓** — root_cause는 사람이 고정, LLM은 표현만 생성. 역분류 검증으로 라벨 일관성 확보.
+- **원인 카탈로그 → 합성 티켓** — LLM 보조로 초안을 작성하고 학부 반도체 공정 지식으로 검토한 가상 카탈로그(검토 범위는 docs/catalog_review.md). root_cause는 사람이 고정, LLM은 표현만 생성. 역분류 검증(2심 + 사람 판정, docs/labeling_policy.md)으로 라벨 일관성 확보.
 - (3주차) RRF, Kiwi 사용자 사전, at-least-once + 멱등성 키
 
 ## 실행
