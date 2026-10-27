@@ -20,6 +20,13 @@ LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
 LLM_MODEL_SMALL = os.getenv("LLM_MODEL_SMALL", LLM_MODEL)  # 검증·판정용 저렴한 모델
 
+# 심판(역분류·관련성 판정) 전용 제공사. 비우면 LLM_*을 그대로 씀.
+# 생성 모델과 다른 제공사로 두면 "자기 글을 자기가 채점하는" 편향이 사라진다.
+JUDGE_BASE_URL = os.getenv("JUDGE_BASE_URL") or LLM_BASE_URL
+JUDGE_API_KEY = os.getenv("JUDGE_API_KEY") or LLM_API_KEY
+JUDGE_MODEL = os.getenv("JUDGE_MODEL") or LLM_MODEL_SMALL
+JUDGE_MIN_INTERVAL = float(os.getenv("JUDGE_MIN_INTERVAL", "0"))
+
 # 임베딩: sentence-transformers 로컬 모델 (기본 bge-m3, 다국어)
 EMBED_MODEL = os.getenv("EMBED_MODEL", "BAAI/bge-m3")
 EMBED_BATCH = int(os.getenv("EMBED_BATCH", "32"))

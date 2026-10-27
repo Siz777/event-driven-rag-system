@@ -4,12 +4,40 @@
 # 구조: 서브시스템 × 고장 메커니즘 (FMEA: 고장모드 → 원인 → 영향 → 검출)
 # confusable_with: 증상이 겹쳐 검색이 헷갈릴 수 있는 원인 — 의도된 난이도
 
+# vocab: 티켓 본문에 허용되는 파라미터·단위·약어. 생성 프롬프트의 페르소나 2·4가 이 목록만 쓴다 (설비 간 혼용 방지).
+# alarm_code: confusable 그룹이 같은 코드를 공유한다 — 코드만으로 원인을 맞힐 수 없게.
 equipment_types:
-  PECVD:  {name: "플라즈마 CVD 증착기", id_range: [1, 12]}
-  ETCH:   {name: "건식 식각기",          id_range: [1, 12]}
-  PVD:    {name: "스퍼터 증착기",        id_range: [1, 8]}
-  PHOTO:  {name: "포토 트랙/스캐너",     id_range: [1, 8]}
-  CMP:    {name: "화학기계연마기",       id_range: [1, 8]}
+  PECVD:
+    name: "플라즈마 CVD 증착기"
+    id_range: [1, 12]
+    vocab: ["CH(챔버)", "BP(베이스 압력, Torr)", "공정 압력(mTorr)", "펌프다운 시간(분)", "TMP rpm", "드라이펌프 전류(A)",
+            "MFC 유량(sccm)", "RF 포워드/리플렉트 파워(W)", "매처 포지션(%)", "서셉터 온도(℃)", "칠러 유량(L/min)",
+            "증착 두께(Å)", "파티클 카운트(ea)", "He 리크율(Torr·L/s)"]
+  ETCH:
+    name: "건식 식각기"
+    id_range: [1, 12]
+    vocab: ["CH(챔버)", "공정 압력(mTorr)", "스로틀 밸브 개도(%)", "TMP rpm", "MFC 유량(sccm)", "소스/바이어스 RF 파워(W)",
+            "반사파(W)", "매처 포지션(%)", "ESC 전압(V)", "He 백사이드 압력(Torr)/유량(sccm)", "웨이퍼 온도(℃)",
+            "가스 모니터 농도(ppm)", "로봇 티칭 오프셋(mm)", "식각률(Å/min)", "CD(nm)"]
+  PVD:
+    name: "스퍼터 증착기"
+    id_range: [1, 8]
+    vocab: ["CH(챔버)", "BP(베이스 압력, Torr)", "크라이오펌프 온도(K)/재생 주기", "타겟 수명(kWh)", "DC 파워(W)/전압(V)",
+            "아크 카운트", "Ar 유량(sccm)", "히터 온도(℃)/TC(열전대)", "마그넷 회전 rpm", "냉각수 유량(L/min)/온도(℃)",
+            "증착 두께(Å)", "면저항(Ω/sq)"]
+  PHOTO:
+    name: "포토 트랙/스캐너"
+    id_range: [1, 8]
+    vocab: ["트랙 온습도(℃, %RH)", "핫플레이트 온도(℃)/존 편차", "PR 토출량(mL)", "스핀 rpm", "막두께(Å)", "CD(nm)",
+            "오버레이(nm)", "얼라인 마크 신호 강도", "광원 출력/도즈(mJ/cm²)", "포커스(nm)", "레티클 검사 디펙 수(ea)",
+            "※ 진공·mTorr·sccm·TMP·MFC 없음(대기압 장비)"]
+  CMP:
+    name: "화학기계연마기"
+    id_range: [1, 8]
+    vocab: ["플래튼 rpm", "헤드 rpm/압력(psi)", "슬러리 유량(mL/min)", "연마율 RR(Å/min)", "비균일도 NU(%)",
+            "컨디셔너 다운포스(lbf)/디스크 수명", "리테이너 링 두께(mm)", "EPD(종점) 신호 강도", "모터 토크/전류(A)",
+            "디펙/스크래치 카운트(ea)", "브러시 교체 주기",
+            "※ 진공·mTorr·sccm·TMP·MFC 없음(대기압 장비)"]
 
 causes:
   # ---------------- PECVD ----------------
@@ -24,7 +52,7 @@ causes:
   - cause_id: C02
     equipment_type: PECVD
     subsystem: 진공
-    alarm_code: E-1102
+    alarm_code: E-1101
     root_cause: "드라이펌프 베인 마모로 인한 배기 성능 저하"
     canonical_resolution: "드라이펌프 교체 및 배기 라인 점검, 펌프다운 곡선 재측정"
     typical_symptoms: ["펌프다운 시간 지연", "펌프 전류 증가", "배기 압력 상승"]
@@ -40,7 +68,7 @@ causes:
   - cause_id: C04
     equipment_type: PECVD
     subsystem: 가스
-    alarm_code: E-1202
+    alarm_code: E-1201
     root_cause: "가스 라인 인라인 필터 포화로 인한 파티클 오염"
     canonical_resolution: "인라인 필터 교체 및 가스 라인 퍼지, 파티클 카운트 재측정"
     typical_symptoms: ["파티클 카운트 증가", "막 결함 증가", "공정 압력 미세 변동"]
@@ -56,7 +84,7 @@ causes:
   - cause_id: C06
     equipment_type: PECVD
     subsystem: RF
-    alarm_code: E-1302
+    alarm_code: E-1301
     root_cause: "샤워헤드 전극 오염 및 마모"
     canonical_resolution: "샤워헤드 교체 및 챔버 클리닝, 균일도 재측정"
     typical_symptoms: ["증착 균일도 저하", "플라즈마 불안정", "아크 발생"]
@@ -72,7 +100,7 @@ causes:
   - cause_id: C08
     equipment_type: PECVD
     subsystem: 온도
-    alarm_code: E-1402
+    alarm_code: E-1401
     root_cause: "칠러 배관 스케일 누적으로 인한 냉각수 유량 저하"
     canonical_resolution: "칠러 배관 플러싱 및 필터 교체, 유량 정상 확인"
     typical_symptoms: ["챔버 벽 온도 상승", "칠러 유량 알람", "파티클 증가"]
@@ -90,11 +118,11 @@ causes:
   - cause_id: C10
     equipment_type: ETCH
     subsystem: 진공
-    alarm_code: E-2102
+    alarm_code: E-2101
     root_cause: "스로틀 밸브 포지션 센서 오차"
     canonical_resolution: "스로틀 밸브 캘리브레이션 및 센서 교체, 압력 제어 응답 확인"
     typical_symptoms: ["공정 압력 진동", "압력 제어 지연", "식각 속도 변동"]
-    confusable_with: [C09]
+    confusable_with: [C09, C11]
   - cause_id: C11
     equipment_type: ETCH
     subsystem: 가스
@@ -102,11 +130,11 @@ causes:
     root_cause: "부식성 가스 라인 공압 밸브 고착"
     canonical_resolution: "밸브 교체 및 라인 퍼지, 밸브 동작 시간 검증"
     typical_symptoms: ["가스 공급 지연", "유량 미도달", "레시피 스텝 타임아웃"]
-    confusable_with: [C12]
+    confusable_with: [C12, C10]
   - cause_id: C12
     equipment_type: ETCH
     subsystem: 가스
-    alarm_code: E-2202
+    alarm_code: E-2201
     root_cause: "가스 박스 피팅 미세 누설"
     canonical_resolution: "피팅 재체결 및 헬륨 리크 체크, 가스 모니터 정상 확인"
     typical_symptoms: ["가스 모니터 경보", "라인 압력 하강", "인터락 발생"]
@@ -122,7 +150,7 @@ causes:
   - cause_id: C14
     equipment_type: ETCH
     subsystem: RF
-    alarm_code: E-2302
+    alarm_code: E-2301
     root_cause: "정전척(ESC) 유전층 열화"
     canonical_resolution: "ESC 교체 및 헬륨 백사이드 누설률 재측정"
     typical_symptoms: ["척킹 실패", "헬륨 백사이드 누설 증가", "웨이퍼 온도 편차"]
@@ -138,7 +166,7 @@ causes:
   - cause_id: C16
     equipment_type: ETCH
     subsystem: 이송
-    alarm_code: E-2502
+    alarm_code: E-2501
     root_cause: "로드락 도어 실(seal) 마모"
     canonical_resolution: "도어 실 교체 후 로드락 누설률 측정"
     typical_symptoms: ["로드락 펌프다운 지연", "로드락 누설 알람", "대기 중 파티클 유입"]
@@ -156,7 +184,7 @@ causes:
   - cause_id: C18
     equipment_type: PVD
     subsystem: 진공
-    alarm_code: E-3102
+    alarm_code: E-3101
     root_cause: "챔버 뷰포트 실 누설"
     canonical_resolution: "뷰포트 실 교체 및 헬륨 리크 체크"
     typical_symptoms: ["베이스 압력 미도달", "헬륨 리크 검출", "막 내 산소 함량 증가"]
@@ -172,7 +200,7 @@ causes:
   - cause_id: C20
     equipment_type: PVD
     subsystem: 타겟
-    alarm_code: E-3302
+    alarm_code: E-3301
     root_cause: "스퍼터 타겟 수명 종료(침식 트랙 심화)"
     canonical_resolution: "타겟 교체 및 번인 후 증착률 재측정"
     typical_symptoms: ["증착률 저하", "막 두께 균일도 저하", "타겟 전압 상승"]
@@ -188,7 +216,7 @@ causes:
   - cause_id: C22
     equipment_type: PVD
     subsystem: 온도
-    alarm_code: E-3401
+    alarm_code: E-3201
     root_cause: "웨이퍼 히터 열전대 열화"
     canonical_resolution: "열전대 교체 및 온도 캘리브레이션"
     typical_symptoms: ["온도 표시값 드리프트", "막 응력 변화", "간헐적 온도 알람"]
@@ -196,7 +224,7 @@ causes:
   - cause_id: C23
     equipment_type: PVD
     subsystem: 구동
-    alarm_code: E-3501
+    alarm_code: E-3301
     root_cause: "마그넷 회전 모터 이상"
     canonical_resolution: "모터 교체 및 회전 균일성 확인"
     typical_symptoms: ["타겟 침식 불균일", "모터 전류 알람", "막 두께 방사상 편차"]
@@ -204,7 +232,7 @@ causes:
   - cause_id: C24
     equipment_type: PVD
     subsystem: 냉각
-    alarm_code: E-3402
+    alarm_code: E-3101
     root_cause: "타겟 백킹플레이트 냉각수 누설"
     canonical_resolution: "백킹플레이트 실 교체, 챔버 베이크아웃 후 수분 제거 확인"
     typical_symptoms: ["냉각수 유량 저하", "타겟 온도 상승", "챔버 내 수분 검출"]
@@ -222,7 +250,7 @@ causes:
   - cause_id: C26
     equipment_type: PHOTO
     subsystem: 코팅
-    alarm_code: E-4102
+    alarm_code: E-4101
     root_cause: "스핀 모터 회전수 편차"
     canonical_resolution: "스핀 모터 교체 및 회전수 캘리브레이션"
     typical_symptoms: ["코팅 두께 편차", "회전수 알람", "에지 비드 이상"]
@@ -238,7 +266,7 @@ causes:
   - cause_id: C28
     equipment_type: PHOTO
     subsystem: 환경
-    alarm_code: E-4202
+    alarm_code: E-4201
     root_cause: "트랙 내부 온습도 제어 이탈"
     canonical_resolution: "온습도 제어기 점검 및 필터 교체, 환경 로그 정상 확인"
     typical_symptoms: ["CD 드리프트", "습도 알람", "PR 접착 불량"]
@@ -254,7 +282,7 @@ causes:
   - cause_id: C30
     equipment_type: PHOTO
     subsystem: 정렬
-    alarm_code: E-4302
+    alarm_code: E-4301
     root_cause: "웨이퍼 스테이지 간섭계 미러 오염"
     canonical_resolution: "간섭계 미러 세정 및 스테이지 캘리브레이션"
     typical_symptoms: ["오버레이 드리프트", "스테이지 위치 오차", "포커스 알람"]
@@ -270,7 +298,7 @@ causes:
   - cause_id: C32
     equipment_type: PHOTO
     subsystem: 광학
-    alarm_code: E-4402
+    alarm_code: E-4401
     root_cause: "레티클 스테이지 파티클 오염"
     canonical_resolution: "레티클 및 스테이지 세정, 반복 결함 재검사"
     typical_symptoms: ["동일 위치 반복 결함", "레티클 검사 불합격", "패턴 결함 증가"]
@@ -280,7 +308,7 @@ causes:
   - cause_id: C33
     equipment_type: CMP
     subsystem: 슬러리
-    alarm_code: E-5101
+    alarm_code: E-5201
     root_cause: "슬러리 공급 라인 응집물로 인한 막힘"
     canonical_resolution: "슬러리 라인 플러싱 및 필터 교체, 유량 정상 확인"
     typical_symptoms: ["연마율 저하", "슬러리 유량 알람", "스크래치 증가"]
@@ -296,7 +324,7 @@ causes:
   - cause_id: C35
     equipment_type: CMP
     subsystem: 컨디셔너
-    alarm_code: E-5202
+    alarm_code: E-5201
     root_cause: "다이아몬드 컨디셔너 디스크 마모"
     canonical_resolution: "컨디셔너 디스크 교체 및 패드 표면 거칠기 확인"
     typical_symptoms: ["연마율 점진적 저하", "패드 표면 거칠기 저하", "디펙 증가"]
@@ -312,7 +340,7 @@ causes:
   - cause_id: C37
     equipment_type: CMP
     subsystem: 헤드
-    alarm_code: E-5302
+    alarm_code: E-5301
     root_cause: "리테이너 링 마모"
     canonical_resolution: "리테이너 링 교체 및 에지 프로파일 재측정"
     typical_symptoms: ["에지 프로파일 이상", "링 두께 하한 도달", "웨이퍼 이탈"]
@@ -328,7 +356,7 @@ causes:
   - cause_id: C39
     equipment_type: CMP
     subsystem: 종점검출
-    alarm_code: E-5501
+    alarm_code: E-5201
     root_cause: "종점 검출 센서 신호 저하"
     canonical_resolution: "센서 창 세정 또는 교체, 종점 신호 레벨 확인"
     typical_symptoms: ["과연마 또는 미연마", "종점 미검출 알람", "두께 산포 증가"]
@@ -336,7 +364,7 @@ causes:
   - cause_id: C40
     equipment_type: CMP
     subsystem: 구동
-    alarm_code: E-5601
+    alarm_code: E-5301
     root_cause: "플래튼 모터 토크 이상"
     canonical_resolution: "모터 및 드라이브 점검·교체, 회전 속도 검증"
     typical_symptoms: ["플래튼 회전 속도 편차", "모터 전류 알람", "연마 비균일"]

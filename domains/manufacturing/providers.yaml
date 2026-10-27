@@ -1,0 +1,15 @@
+# 제공사 비교 실험용. api_key_env는 .env의 변수명. 비교에 넣고 싶은 것만 남긴다.
+# 심판은 .env의 JUDGE_* 설정을 쓴다 (모든 후보를 같은 심판이 채점)
+providers:
+  - name: gemini
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai/
+    api_key_env: LLM_API_KEY
+    model: gemini-3.8-flash
+  - name: ollama-qwen7b
+    base_url: http://localhost:11434/v1
+    api_key_env: OLLAMA_KEY          # .env에 OLLAMA_KEY=ollama 한 줄
+    model: qwen2.5:7b
+  # - name: openai-mini
+  #   base_url: https://api.openai.com/v1
+  #   api_key_env: OPENAI_API_KEY
+  #   model: gpt-5-mini

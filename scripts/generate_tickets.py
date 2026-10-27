@@ -16,12 +16,15 @@ from rag import config
 from rag.documents import load_catalog, load_jsonl
 from rag.llm import chat_json
 
+# {date}는 티켓별 발생일 — build_prompt()에서 채운다. 약어 목록(vocab)은 프롬프트 상단 [파라미터·단위·약어]에 한 번만 (v2)
+PROMPT_VERSION = "v2"   # generate_ticket.txt 바꾸면 올린다. 티켓에 기록되어 세대 구분용
+
 PERSONAS = [
-    "1. 작성자: 신입 오퍼레이터 / 문체: 짧고 비전문적, 보이는 증상 위주, 원인 추측 없음, 존댓말",
-    "2. 작성자: 10년차 설비 엔지니어 / 문체: 전문 용어와 약어(CH, BP, TMP, MFC 등), 측정 수치와 로그 포함, 개조식",
-    "3. 작성자: 야간 근무자 / 문체: 급하게 쓴 메모, 오타 1~2개, 문장 미완성, 시간 표기 포함",
-    "4. 작성자: 협력사 기술자 / 문체: 한영 혼용, 부품은 영문명(valve, pump, chamber 등), 격식체",
-    "5. 작성자: 품질팀 담당자 / 문체: 격식체, 영향 범위(공정 중단 시간, 웨이퍼 손실 수량, 로트 홀드) 강조",
+    "1. 발생일 {date} / 작성자: 신입 오퍼레이터 / 문체: 짧고 비전문적, 보이는 증상 위주, 원인 추측 없음, 존댓말",
+    "2. 발생일 {date} / 작성자: 10년차 설비 엔지니어 / 문체: 전문 용어·약어·수치는 위 [파라미터·단위·약어] 목록에서만, 측정 수치와 로그 포함, 개조식",
+    "3. 발생일 {date} / 작성자: 야간 근무자 / 문체: 급하게 쓴 메모, 오타 1~2개, 문장 미완성, 시간 표기 포함",
+    "4. 발생일 {date} / 작성자: 협력사 기술자 / 문체: 한영 혼용, 부품은 영문 일반명(valve, pump, chamber 등), 수치·약어는 위 [파라미터·단위·약어] 목록에서만, 격식체",
+    "5. 발생일 {date} / 작성자: 품질팀 담당자 / 문체: 격식체, 영향 범위(공정 중단 시간, 웨이퍼 손실 수량, 로트 홀드) 강조",
 ]
 STOP = {"인한", "으로", "및", "종료", "이상", "초과", "실패", "저하", "열화", "불량", "오차", "지연", "편차",
         "오염", "고장", "마모", "손상", "누설", "막힘", "고착", "단선", "드리프트", "이탈", "불균일", "심화", "응답"}
@@ -33,6 +36,20 @@ def keywords(root_cause: str) -> str:
     toks = [re.sub(r"(으로|로|의|에)$", "", t) for t in toks]   # 조사 제거
     toks = [t for t in toks if len(t) >= 2]
     return ", ".join(dict.fromkeys(t for t in toks if t not in STOP)) or root_cause
+
+
+def build_prompt(tmpl: str, cat: dict, c: dict, n: int, dates: list[str]) -> str:
+    """원인 c에 대해 n건 생성 프롬프트. dates[i]가 i번째 티켓의 발생일(페르소나 줄에 들어감)."""
+    et = cat["equipment_types"][c["equipment_type"]]
+    vocab = ", ".join(et.get("vocab", []))
+    personas = "\n".join(p.format(date=d) for p, d in zip(PERSONAS[:n], dates))
+    return tmpl.format(
+        n=n, equipment_name=et["name"], equipment_type=c["equipment_type"],
+        id_min=et["id_range"][0], id_max=et["id_range"][1], subsystem=c["subsystem"],
+        root_cause=c["root_cause"], typical_symptoms=", ".join(c["typical_symptoms"]),
+        personas=personas, root_cause_keywords=keywords(c["root_cause"]),
+        alarm_code=c["alarm_code"], vocab=vocab,
+    )
 
 
 def main():
@@ -64,28 +81,22 @@ def main():
     total = len(existing)
 
     for c in tqdm(causes, desc="causes"):
-        et = cat["equipment_types"][c["equipment_type"]]
+        et = cat["equipment_types"][c["equipment_type"]]   # equipment_id 폴백용
         made, attempts = done.get(c["cause_id"], 0), 0
         while made < args.per_cause and attempts < 6:
             attempts += 1
             n = min(5, args.per_cause - made)
-            prompt = tmpl.format(
-                n=n, equipment_name=et["name"], equipment_type=c["equipment_type"],
-                id_min=et["id_range"][0], id_max=et["id_range"][1], subsystem=c["subsystem"],
-                root_cause=c["root_cause"], typical_symptoms=", ".join(c["typical_symptoms"]),
-                personas="\n".join(PERSONAS[:n]), root_cause_keywords=keywords(c["root_cause"]),
-                alarm_code=c["alarm_code"],
-            )
+            dates = [(date(year, 1, 1) + timedelta(days=random.randint(0, 300))).isoformat() for _ in range(n)]
+            prompt = build_prompt(tmpl, cat, c, n, dates)
             try:
                 items = chat_json(prompt, temperature=args.temperature)
             except Exception as e:
                 print(f"[retry] {c['cause_id']}: {e}")
                 continue
             batch = []
-            for it in items[:n]:
+            for i, it in enumerate(items[:n]):
                 if not it.get("symptom"):
                     continue
-                d = date(year, 1, 1) + timedelta(days=random.randint(0, 300))
                 batch.append({
                     "ticket_id": f"INC-{year}-{seq:04d}",
                     "cause_id": c["cause_id"],
@@ -99,8 +110,10 @@ def main():
                     "root_cause": c["root_cause"],                 # 카탈로그에서 복사 — LLM이 쓰지 않음
                     "canonical_resolution": c["canonical_resolution"],
                     "downtime_min": int(it.get("downtime_min") or random.randint(30, 480)),
-                    "date": d.isoformat(),
+                    "date": dates[i],                               # 프롬프트에 준 발생일과 동일
                     "persona": str(it.get("persona", "")),
+                    "gen_model": config.LLM_MODEL,                 # 제공사 비교용
+                    "prompt_version": PROMPT_VERSION,
                 })
                 seq += 1
                 made += 1
