@@ -1,5 +1,7 @@
 # 1주차 실험 요약 (experiments.jsonl 전체 행)
 
+계획 단위: 1주차 / 실제 기간: 2026-10-26 ~ 10-29
+
 k=5, 임베딩 bge-m3(1024), 로컬 Qdrant, 티켓 318건(tickets.clean.jsonl). positive = negative 제외 질의 수.
 
 | # | 실험 | 시각 | 설정 | positive n | R@5 | MRR | 난이도별 R@5 | 비고 |

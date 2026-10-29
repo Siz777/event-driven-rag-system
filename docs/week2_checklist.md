@@ -46,8 +46,8 @@ Step은 작업 단계이며 달력 날짜와 무관. 진행 날짜는 docs/log/ 
 ## Step 6 — TTL 재시도 큐 + DLQ
 - [x] 재시도 큐 3단 `ai_tasks.retry.5s/25s/125s`(x-message-ttl, DLX → events/ai_tasks 복귀), `ai_tasks.dlq` (Step 3에서 선언)
 - [x] 헤더 `x-retry-count`로 횟수 추적, 3회 초과 시 DLQ (Step 4 워커, test_c)
-- [ ] 확인: 워커에서 강제 예외 → retry 큐 경유 3회 → DLQ에 1건, 메시지 원문 보존
-- [ ] 산출물: 큐 3개 토폴로지 그림(docs/events.md) + DLQ 도달 확인 기록
+- [x] 확인: 강제 예외 → retry.5s 경유 복귀(test_b) · x-retry-count 3에서 실패 → DLQ 1건, 원문·x-last-error 보존(test_c). 3단 155s 전 구간 수동 통과는 3주차로
+- [x] 산출물: 토폴로지 그림(docs/events.md 3절·mq/topology.py docstring) + DLQ 도달 기록(일지 10-29 워커 확인 기록)
 
 ## Step 6 (Docker) — 컨테이너 전체 경로
 - [x] `Dockerfile.api`(python:3.12-slim, requirements-api.txt만, HEALTHCHECK /health) / `Dockerfile.worker`(torch CPU 휠 고정, HEALTHCHECK ready 파일). CMD exec form, worker `init: true`, `stop_grace_period: 150s`
@@ -59,8 +59,8 @@ Step은 작업 단계이며 달력 날짜와 무관. 진행 날짜는 docs/log/ 
 
 ## Step 7 — graceful shutdown
 - [x] SIGTERM 수신 시: 새 메시지 소비 중단 → 처리 중인 1건 완료·ack → 연결 종료. 타임아웃 120s(WORKER_DRAIN_TIMEOUT) (Step 4에서 구현)
-- [ ] 확인: 처리 중(LLM 호출 중) SIGTERM → 답변이 outbound에 도착하고 중복 없음. 타임아웃 초과 시 nack → 재시도 경로
-- [ ] 산출물: 종료 핸들러 + 처리 중 종료 테스트 기록
+- [x] 확인: LLM 호출 중 SIGTERM/Ctrl+C 3회(로컬 21s·컨테이너 16s·19s) → 답 도착, ai_tasks 0, 중복 0. 타임아웃 초과 경로(unacked → requeue → stale 재처리)는 미실험 — 3주차로
+- [x] 산출물: 종료 핸들러(worker/main.py) + test_e + 일지 기록 + week2_summary.md drain 로그 발췌
 
 ## Step 8 — Slack Socket Mode 어댑터
 - [x] `adapters/slack_socket.py`(Bolt AsyncApp, `api.slack.to_inbound` 재사용, source=slack_socket) → 직접 publish → "검색 중…" progress(say thread_ts). `adapters/slack_reply.py`: ai_results 소비 → chat.postMessage(thread_ts=reply_to) → 성공 뒤 ack. `adapters/slack_main.py` 한 프로세스
@@ -68,12 +68,12 @@ Step은 작업 단계이며 달력 날짜와 무관. 진행 날짜는 docs/log/ 
 - [x] 계약: `reply_to`를 새 질문이면 메시지 ts로(전엔 null → Slack에 달 곳 없음), status에 `progress` 추가
 - [x] 테스트 16개(to_inbound 재사용·handle_event 무시/허용목록/publish 실패·format_reply 4종·ReplyConsumer ack/nack 규칙)
 - [x] 확인(수동): 17:52 왕복 성공 latency 21.8s(postMessage). 18:03 재확인 18.6s(chat.update로 "검색 중…"이 답변으로 바뀜), 폴백(message_not_found → 새 답글)도 확인. Slack #incident-test에서 "@incident-bot 펌프다운이 평소보다 오래 걸리는데" → "검색 중…" → 스레드에 [INC-xxxx] 인용 답변. 워커 kill 후 재시작해도 답변 도착
-- [ ] 산출물: 실제 Slack 왕복 1건 스크린샷/로그(latency_from_question) + README 실행 절차 갱신(갱신함)
+- [x] 산출물: Slack 왕복 로그 2건(일지: 21.8s posted · 18.6s updated) + README 실행 절차 갱신. 스크린샷은 사용자 보관
 
 ## 주차 마무리
-- [ ] `docs/events.md` 완성: 계약, 큐 토폴로지, 실패 경로(재시도·DLQ·중복·종료) 표
-- [ ] 일지: 결정 칸에 "RabbitMQ vs Kafka", "SETNX vs DB unique", "retry TTL vs 즉시 requeue" 근거
-- [ ] 한 줄 후보 1개: 유실·중복·종료 중 하나를 실제로 깨뜨려 본 경험
+- [x] `docs/events.md` 완성: 계약(1절), 입구 2·2-b절, 토폴로지 3절 + RabbitMQ vs Kafka 3-b절, 실패 경로 표 4절(Slack 전송·Socket publish 실패 행 추가)
+- [x] 일지: SETNX vs DB unique(Step 5 결정), retry TTL vs 즉시 requeue(Step 3·4 결정), RabbitMQ vs Kafka(10-29 결정 + events.md 3-b)
+- [x] 한 줄 후보: 종료 — shell form CMD로 띄운 워커는 SIGTERM이 sh에서 멈춰 150s 뒤 SIGKILL, 처리 중 답이 사라졌다. exec form + tini로 바꾼 뒤 LLM 호출 중 stop해도 21s 뒤 답이 도착했다(일지 "한 줄")
 
 ## 하지 않는 것 (3주차)
 - BM25/하이브리드, negative LLM 판정, LangGraph, 카탈로그 전공 검토 마무리, 사람 질의 #human 채우기

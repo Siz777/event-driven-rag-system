@@ -142,6 +142,17 @@ flowchart LR
 - 연결: `connect_robust`(끊기면 자동 재연결). 웹훅은 첫 요청 때 연결하므로 브로커가 죽어 있어도 프로세스는 뜨고, 그 요청만 503.
 - 패키지명이 `queue`가 아니라 `mq`인 이유: `queue`는 표준 라이브러리 모듈이라 같은 이름의 패키지가 cwd에 있으면 stdlib `queue`를 가린다(concurrent.futures·logging.handlers가 깨짐).
 
+## 3-b. 결정: RabbitMQ vs Kafka
+
+| | RabbitMQ (선택) | Kafka |
+|---|---|---|
+| 문제 성격 | 작업 큐 — 질문 1건을 워커 1개가 한 번 처리하고 ack | 로그 — 파티션 순서·재생·다중 소비자 그룹 |
+| 실패 처리 | DLQ·TTL 재시도 큐·수동 ack·prefetch가 브로커 기능 | 재시도·DLQ 토픽을 직접 만들고 오프셋 커밋을 관리 |
+| 처리량 요구 | 없음(공장 1곳, 질문 분당 수 건) | 초당 수만 건 |
+| 운영 | 컨테이너 1개, 관리 UI 내장 | 브로커 + 컨트롤러(KRaft)·파티션 설계 |
+
+선택: 공정 분배와 유실 방지가 요구사항이고 처리량·재생은 아니므로 RabbitMQ. **재검토 조건**: 초당 수백 건 이상이 되거나(단일 큐 병목), 과거 질문을 재생해 다시 처리해야 할 때(ack된 메시지는 RabbitMQ에서 사라진다).
+
 ## 4. 실패 경로 (`worker/main.py`)
 
 워커: prefetch 1, 수동 ack. ack은 결과 publish가 confirm된 뒤에만. 파이프라인(임베딩·LLM)은 `to_thread`로 돌려 heartbeat를 막지 않는다.
@@ -155,7 +166,9 @@ flowchart LR
 | 재시도/DLQ publish 자체 실패(브로커 단절) | ack 못 함, 예외 로그 | unacked → 연결 끊기면 브로커가 requeue | — |
 | 워커가 손도 못 댐(nack requeue=False, 큐 초과) | — | `ai_tasks` DLX → `events.dlx` → `ai_tasks.dlq` | 토폴로지 |
 | SIGTERM/SIGINT | consumer cancel → 처리 중 1건 완료·ack 대기(`WORKER_DRAIN_TIMEOUT` 120s) → 연결 종료 | 답은 ai_results에 도착, ai_tasks 0 | test_e, 수동(LLM 호출 중 Ctrl+C) |
-| drain 타임아웃 초과 | 경고 로그, unacked로 두고 종료 | 연결 끊기며 브로커가 requeue → 다른 워커가 재처리 (멱등성 Step 5 전엔 중복 답 가능) | — |
+| drain 타임아웃 초과 | 경고 로그, unacked로 두고 종료 | 연결 끊기며 브로커가 requeue → 다른 워커가 재처리. 키가 `processing:`으로 남으면 300s 뒤 stale로 재처리 | — (미실험, 3주차) |
+| Slack 답글 전송 실패(`adapters/slack_reply.py`) | 영구 오류(channel_not_found·not_in_channel·invalid_auth…) → 로그 + ack(폐기) / 일시 오류(ratelimited·네트워크) → 2s 뒤 nack requeue / progress 편집 대상 없음 → 새 답글 | ai_results는 전송 성공 뒤에만 빠진다 | test_slack_adapter |
+| Socket Mode에서 publish 실패 | 사용자에게 "접수 불가" 1줄 + ERROR 로그 | **질문 유실** — Bolt가 이미 ack해 Slack 재전송 없음(웹훅 503과 다름, 의도적) | test_slack_adapter |
 | 같은 event_id 재전송(Slack 재전송·재큐·워커 재시작) | Redis `SET idem:{event_id} NX EX 86400` 실패 → "duplicate, ack only" — 파이프라인·ai_results 없음 | ack, 답 1건만 | test_f |
 | Redis 불가 | WARNING "idempotency guard disabled" 후 가드 없이 처리 | 정상 처리(중복 답 가능) | test_g |
 
