@@ -1,0 +1,17 @@
+{
+  "token": "XXYYZZ",
+  "team_id": "T0123TEAM",
+  "api_app_id": "A0123APP",
+  "event": {
+    "type": "app_mention",
+    "user": "U0456ENG",
+    "text": "<@U0789BOT> 펌프다운이 평소보다 오래 걸리는데 예전에 비슷한 일 있었어?",
+    "ts": "1793232753.123456",
+    "channel": "C0123FAB",
+    "event_ts": "1793232753.123456"
+  },
+  "type": "event_callback",
+  "event_id": "Ev08ABC123",
+  "event_time": 1793232753,
+  "authorizations": [{"team_id": "T0123TEAM", "user_id": "U0789BOT", "is_bot": true}]
+}

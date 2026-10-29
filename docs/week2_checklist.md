@@ -11,10 +11,10 @@ Step은 작업 단계이며 달력 날짜와 무관. 진행 날짜는 docs/log/ 
 - [x] 산출물: 계약 2개 + 테스트 + `docs/events.md`에 필드 표와 예시 JSON 1쌍
 
 ## Step 2 — FastAPI 웹훅 어댑터
-- [ ] `api/webhook.py`: `POST /events` — 본문을 InboundEvent로 검증, 큐에 publish, 202 반환. 검증 실패는 422
-- [ ] 큐가 죽어 있으면 503 (publish 실패를 삼키지 않는다)
-- [ ] `curl`로 1건 보내 202 확인, 잘못된 본문 422 확인
-- [ ] 산출물: 엔드포인트 1개 + 로컬 curl 기록(docs/log)
+- [x] `api/webhook.py`: `POST /events` — Slack 서명 검증(HMAC-SHA256, 5분 창) → url_verification challenge → event_callback을 InboundEvent로 변환, 202 반환. 검증 실패는 200 ignored+로그(Slack 재전송 방지), 서명 실패 401
+- [x] 큐가 죽어 있으면 503 (publish 실패를 삼키지 않는다) — publish 주입, 예외 → 503. 지금은 로그만(Step 3에서 RabbitMQ publish로 교체)
+- [x] `curl`로 1건 보내 202 확인, 잘못된 본문(멘션만) 200 ignored 확인 (서명 불일치·오래된 타임스탬프 401 포함)
+- [x] 산출물: 엔드포인트 1개 + 로컬 curl 기록(docs/log 10-29) + tests/fixtures/slack_app_mention.json + tests/test_webhook.py
 
 ## Step 3 — RabbitMQ
 - [ ] docker-compose에 rabbitmq(management 포함) 추가, `events.inbound` durable 큐, 메시지 persistent

@@ -10,5 +10,12 @@ qdrant-client>=1.10
 bm25s>=0.2
 kiwipiepy>=0.18
 
+# 2주차: 이벤트 경로
+fastapi>=0.115
+uvicorn[standard]>=0.30
+aio-pika>=9.4
+redis>=5.0
+httpx>=0.27  # TestClient
+
 # 테스트
 pytest>=8.0

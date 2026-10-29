@@ -78,8 +78,23 @@ OutboundEvent (`inbound.reply(...)`로 생성)
 }
 ```
 
-## 2. 큐 토폴로지
+## 2. 입구: POST /events (Slack Events API)
+
+| 상황 | 응답 | 이유 |
+|---|---|---|
+| 서명 헤더 없음·불일치·타임스탬프 ±5분 밖 | 401 | 재전송 공격 차단. 비밀은 `SLACK_SIGNING_SECRET` |
+| `SLACK_SIGNING_SECRET` 미설정 | 503 | 검증 없이 받지 않는다 |
+| JSON 파싱 실패 | 400 | |
+| `url_verification` | 200 `{challenge}` | Slack 앱 URL 등록 시 1회 |
+| `event_callback` → InboundEvent 검증 실패(멘션만 있는 빈 질문 등) | 200 ignored + WARNING 로그 | 422면 Slack이 재전송한다. 질문이 아닌 건 조용히 버린다 |
+| 봇 글·편집(subtype)·채널 일반 메시지·미지 타입 | 200 ignored | Slack은 2xx가 아니면 재전송하므로 무시도 2xx |
+| publish 예외 | 503 | 큐 장애를 삼키지 않는다. Slack이 재전송(X-Slack-Retry-Num) |
+| 정상 | 202 `{event_id}` | 큐에 들어갔다는 뜻. 답은 비동기 |
+
+처리 대상: `app_mention`, DM(`message` + `channel_type=im`). 멘션 토큰(`<@U…>`)은 제거. `event_id`=Slack event_id, `ts`=event.ts(epoch→UTC), `reply_to`=thread_ts.
+
+## 3. 큐 토폴로지
 (Step 3·6에서 채움: `events.inbound` / `events.retry` / `events.dlq` / `events.outbound`)
 
-## 3. 실패 경로
+## 4. 실패 경로
 (주차 마무리에서 채움: 재시도·DLQ·중복·종료 표)
