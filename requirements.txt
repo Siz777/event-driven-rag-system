@@ -9,3 +9,6 @@ qdrant-client>=1.10
 # 3주차 하이브리드 검색용 (지금 설치해도 무방)
 bm25s>=0.2
 kiwipiepy>=0.18
+
+# 테스트
+pytest>=8.0

@@ -6,9 +6,9 @@ Step은 작업 단계이며 달력 날짜와 무관. 진행 날짜는 docs/log/ 
 목표: 금요일에 **Slack에서 질문을 치면 워커가 답을 다는 경로 하나**가 끝까지 돈다. 워커를 죽여도 메시지가 안 사라지고, 같은 메시지를 두 번 보내도 답은 한 번만 간다.
 
 ## Step 1 — 이벤트 계약
-- [ ] `events/contracts.py`: `InboundEvent`(event_id, source, channel, user, text, ts, reply_to) / `OutboundEvent`(event_id, in_reply_to, text, citations, status) — pydantic, 버전 필드 포함
-- [ ] 직렬화 왕복 테스트 (`tests/test_contracts.py`): dict → model → JSON → model 동일
-- [ ] 산출물: 계약 2개 + 테스트 + `docs/events.md`에 필드 표와 예시 JSON 1쌍
+- [x] `events/contracts.py`: `InboundEvent`(event_id, source, channel, user, text, ts, reply_to) / `OutboundEvent`(event_id, in_reply_to, text, citations, status) — pydantic, 버전 필드 포함
+- [x] 직렬화 왕복 테스트 (`tests/test_contracts.py`): dict → model → JSON → model 동일
+- [x] 산출물: 계약 2개 + 테스트 + `docs/events.md`에 필드 표와 예시 JSON 1쌍
 
 ## Step 2 — FastAPI 웹훅 어댑터
 - [ ] `api/webhook.py`: `POST /events` — 본문을 InboundEvent로 검증, 큐에 publish, 202 반환. 검증 실패는 422
