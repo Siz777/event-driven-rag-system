@@ -1,8 +1,35 @@
-# 1주차엔 선택. QDRANT_URL=http://localhost:6333 으로 바꾸면 사용.
 services:
+  # 1주차엔 선택. QDRANT_URL=http://localhost:6333 으로 바꾸면 사용.
   qdrant:
     image: qdrant/qdrant:v1.12.4
     ports: ["6333:6333"]
     volumes: ["qdrant_data:/qdrant/storage"]
+
+  # 2주차: 이벤트 큐. 5672 AMQP, 15672 관리 UI (guest/guest, localhost만)
+  # docker compose up -d rabbitmq
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    ports: ["5672:5672", "15672:15672"]
+    volumes: ["rabbitmq_data:/var/lib/rabbitmq"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 2주차 Step 5: 멱등성 키(idem:{event_id}, 24h). 유실돼도 중복 답 위험만 생기고 서비스는 돈다
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    volumes: ["redis_data:/data"]
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
 volumes:
   qdrant_data:
+  rabbitmq_data:
+  redis_data:

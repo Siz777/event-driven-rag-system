@@ -17,32 +17,40 @@ Step은 작업 단계이며 달력 날짜와 무관. 진행 날짜는 docs/log/ 
 - [x] 산출물: 엔드포인트 1개 + 로컬 curl 기록(docs/log 10-29) + tests/fixtures/slack_app_mention.json + tests/test_webhook.py
 
 ## Step 3 — RabbitMQ
-- [ ] docker-compose에 rabbitmq(management 포함) 추가, `events.inbound` durable 큐, 메시지 persistent
-- [ ] 소비자 설정: prefetch 1, 수동 ack (처리 끝나야 ack, 예외면 nack)
-- [ ] 확인: 워커 없이 10건 publish → RabbitMQ 재시작 → 10건 그대로 남아 있음
-- [ ] 산출물: compose 서비스 + 큐 선언 코드 + 재시작 생존 확인 기록
+- [x] docker-compose에 rabbitmq:3.13-management 추가(5672/15672). `mq/topology.py`: exchange events(direct) · `ai_tasks`(durable, DLX=events.dlx) · `ai_tasks.dlq` · 재시도 3단 `ai_tasks.retry.5s/25s/125s`(TTL, DLX→events 복귀) · `ai_results`. `declare()` 멱등
+- [x] `mq/publisher.py`: connect_robust + publisher confirms + PERSISTENT, 본문 InboundEvent.to_json(), 헤더 x-retry-count·event_id. 웹훅 publish 주입을 실제 Publisher로(브로커 불가 → 503, 테스트로 확인)
+- [x] 소비자 설정: prefetch 1, 수동 ack (처리 끝나야 ack) — Step 4 워커에서
+- [x] 통합 테스트(`pytest -m integration`, 브로커 없으면 skip): publish → 관리 API 큐 깊이 1, 선언 2회 멱등, 웹훅 end-to-end — 3 passed
+- [x] 확인: 워커 없이 10건 publish → RabbitMQ 재시작 → 10건 그대로 남아 있음 (10 → 10, messages_persistent 10)
+- [x] 수동 확인: 서명된 curl 1회 → 관리 UI ai_tasks 메시지 1개 → 스크린샷 docs/experiments/rabbitmq_queues_2026-10-29.png
+- [x] 산출물: compose 서비스 + 큐 선언 코드 + 재시작 생존 확인 기록(docs/log 10-29)
 
 ## Step 4 — aio-pika 워커 (ask.py 이식)
-- [ ] `worker/consumer.py`: 메시지 1건 → InboundEvent → `ask.answer()` → OutboundEvent → `events.outbound` publish → ack
-- [ ] 임베딩·Qdrant 클라이언트는 워커 시작 시 1회 로드 (메시지마다 로드 금지)
-- [ ] 처리 중 예외: nack(requeue=False) → Step 6의 재시도 경로로
-- [ ] 확인: 웹훅 1건 → outbound 큐에 답변 1건, [INC-xxxx] 인용 포함
-- [ ] 산출물: 워커 1개 + 끝까지 도는 경로 1개 (웹훅 → 큐 → 워커 → outbound)
+- [x] `rag/pipeline.py`: `answer(InboundEvent) -> OutboundEvent` 순수 함수(검색·LLM 주입), no_match 규칙, LLM 타임아웃 90s. ask.py는 호출만
+- [x] `worker/main.py`: 메시지 1건 → InboundEvent → `pipeline.answer` → OutboundEvent → `ai_results` publish → ack. prefetch 1, 수동 ack
+- [x] 임베딩·Qdrant 클라이언트는 워커 시작 시 1회 로드(warmup 7.8s) (메시지마다 로드 금지)
+- [x] 처리 중 예외: x-retry-count+1 → retry 티어 publish → ack (3회 초과 dlq, 독 메시지 즉시 dlq). nack(requeue=True) 안 씀
+- [x] graceful shutdown: SIGTERM/SIGINT → consumer cancel → 처리 중 1건 완료 대기(120s) → 종료. 로그 "draining 1 in-flight… done"
+- [x] 테스트: pipeline 유닛 8개(fake) + 워커 integration 5개(성공·retry.5s 복귀·dlq·독 메시지·graceful stop)
+- [x] 확인: 웹훅 1건 → ai_results에 답변 1건, [INC-xxxx] 인용 포함 (실제 LLM, 17.8s, 인용 5건)
+- [x] 확인: LLM 호출 중 Ctrl+C → draining → 21.8s 뒤 답 도착·ack, ai_tasks 0
+- [x] 산출물: 워커 1개 + 끝까지 도는 경로 1개 (웹훅 → ai_tasks → 워커 → ai_results)
 
 ## Step 5 — 멱등성
-- [ ] Redis `SETNX processed:{event_id}` + TTL(24h). 이미 있으면 처리 없이 ack
-- [ ] 확인: 같은 event_id 3번 publish → 답변 1건, 로그에 "duplicate skipped" 2건
-- [ ] 경계: SETNX 성공 후 처리 중 죽으면? → 키에 상태(processing/done) 두고 processing 상태 TTL 짧게. 결정을 docs/log에 기록
-- [ ] 산출물: 멱등 가드 + 중복 3회 테스트 기록
+- [x] docker-compose에 redis:7-alpine(appendonly), `.env.example` REDIS_URL. Redis `SET idem:{event_id} NX EX 86400`. 이미 있으면 "duplicate, ack only" — 파이프라인·ai_results 없이 ack. 키는 성공 뒤에도 24h 유지
+- [x] Redis 연결 실패 → 가드 없이 처리 + WARNING(멱등 가드 비활성). 웹훅 쪽 가드 없음(이유 events.md 4절)
+- [x] 확인(integration): 같은 event_id 2건 publish → 답변 1건, 로그 "duplicate, ack only" 1건 / Redis 내려간 상태 → 처리됨 + WARNING
+- [x] 경계: 처리 중 죽으면? → 값 processing:{epoch} / done. processing이 300s 넘게 오래되면 재처리, 최근이면 중복. 실패(재시도행)면 키 삭제. 결정 docs/events.md 4절·일지
+- [x] 산출물: 멱등 가드(IdempotencyGuard) + 테스트 5개(중복·Redis 다운·실패 시 키 해제·stale 재처리·최근 processing 중복)
 
 ## Step 6 — TTL 재시도 큐 + DLQ
-- [ ] `events.retry` 큐(x-message-ttl 30s, dead-letter → `events.inbound`), `events.dlq` (최종)
-- [ ] 헤더 `x-retry-count`로 횟수 추적, 3회 초과 시 DLQ
+- [x] 재시도 큐 3단 `ai_tasks.retry.5s/25s/125s`(x-message-ttl, DLX → events/ai_tasks 복귀), `ai_tasks.dlq` (Step 3에서 선언)
+- [x] 헤더 `x-retry-count`로 횟수 추적, 3회 초과 시 DLQ (Step 4 워커, test_c)
 - [ ] 확인: 워커에서 강제 예외 → retry 큐 경유 3회 → DLQ에 1건, 메시지 원문 보존
 - [ ] 산출물: 큐 3개 토폴로지 그림(docs/events.md) + DLQ 도달 확인 기록
 
 ## Step 7 — graceful shutdown
-- [ ] SIGTERM 수신 시: 새 메시지 소비 중단 → 처리 중인 1건 완료·ack → 연결 종료. 타임아웃 30s
+- [x] SIGTERM 수신 시: 새 메시지 소비 중단 → 처리 중인 1건 완료·ack → 연결 종료. 타임아웃 120s(WORKER_DRAIN_TIMEOUT) (Step 4에서 구현)
 - [ ] 확인: 처리 중(LLM 호출 중) SIGTERM → 답변이 outbound에 도착하고 중복 없음. 타임아웃 초과 시 nack → 재시도 경로
 - [ ] 산출물: 종료 핸들러 + 처리 중 종료 테스트 기록
 

@@ -93,8 +93,70 @@ OutboundEvent (`inbound.reply(...)`로 생성)
 
 처리 대상: `app_mention`, DM(`message` + `channel_type=im`). 멘션 토큰(`<@U…>`)은 제거. `event_id`=Slack event_id, `ts`=event.ts(epoch→UTC), `reply_to`=thread_ts.
 
-## 3. 큐 토폴로지
-(Step 3·6에서 채움: `events.inbound` / `events.retry` / `events.dlq` / `events.outbound`)
+## 3. 큐 토폴로지 (`mq/topology.py`, `declare()` 한 번으로 멱등 선언)
 
-## 4. 실패 경로
-(주차 마무리에서 채움: 재시도·DLQ·중복·종료 표)
+```mermaid
+flowchart LR
+  W[웹훅 publisher] -->|"ai_tasks"| X{{events<br/>direct}}
+  X -->|ai_tasks| T[(ai_tasks<br/>durable, DLX=events.dlx)]
+  T -->|consume · ack| K[워커 Step 4]
+  K -->|"실패: x-retry-count+1<br/>→ ai_tasks.retry.{5s,25s,125s}"| X
+  X -->|ai_tasks.retry.5s| R1[(retry.5s<br/>TTL 5s)]
+  X -->|ai_tasks.retry.25s| R2[(retry.25s<br/>TTL 25s)]
+  X -->|ai_tasks.retry.125s| R3[(retry.125s<br/>TTL 125s)]
+  R1 & R2 & R3 -->|"TTL 만료 → DLX=events, key=ai_tasks"| X
+  K -->|"3회 소진: ai_tasks.dlq"| X
+  X -->|ai_tasks.dlq| D[(ai_tasks.dlq)]
+  T -. "nack(requeue=False)·만료" .-> DX{{events.dlx}} -->|ai_tasks| D
+  K -->|"ai_results (OutboundEvent)"| X
+  X -->|ai_results| O[(ai_results)]
+  O --> S[Slack 어댑터 Step 8]
+```
+
+| 이름 | 종류 | 인자 | 바인딩 |
+|---|---|---|---|
+| events | exchange direct, durable | | |
+| events.dlx | exchange direct, durable | | |
+| ai_tasks | queue durable | x-dead-letter-exchange=events.dlx | events:"ai_tasks" |
+| ai_tasks.retry.5s / 25s / 125s | queue durable | x-message-ttl=5000/25000/125000, x-dead-letter-exchange=events, x-dead-letter-routing-key=ai_tasks | events:"<큐 이름>" |
+| ai_tasks.dlq | queue durable | | events.dlx:"ai_tasks" (안전망) + events:"ai_tasks.dlq" (워커 직접) |
+| ai_results | queue durable | | events:"ai_results" |
+
+- 메시지: 본문 `InboundEvent.to_json()`, `delivery_mode=PERSISTENT`, `message_id=event_id`, 헤더 `x-retry-count`(0부터)·`event_id`. publisher confirms + `mandatory=True`(라우팅 안 되면 예외 → 웹훅 503).
+- 재시도는 워커가 명시적으로 한다(Step 6): 실패 → `x-retry-count+1` → `retry_queue_for(n)`로 publish → 원본 ack. TTL이 끝나면 DLX를 타고 `ai_tasks`로 돌아온다. 3회(5+25+125s ≈ 2.6분) 넘으면 `ai_tasks.dlq`.
+- `ai_tasks`의 DLX는 워커가 손도 못 댄 경우(nack requeue=False, 큐 길이 초과)의 안전망. 둘 다 `ai_tasks.dlq`에 모인다.
+- 연결: `connect_robust`(끊기면 자동 재연결). 웹훅은 첫 요청 때 연결하므로 브로커가 죽어 있어도 프로세스는 뜨고, 그 요청만 503.
+- 패키지명이 `queue`가 아니라 `mq`인 이유: `queue`는 표준 라이브러리 모듈이라 같은 이름의 패키지가 cwd에 있으면 stdlib `queue`를 가린다(concurrent.futures·logging.handlers가 깨짐).
+
+## 4. 실패 경로 (`worker/main.py`)
+
+워커: prefetch 1, 수동 ack. ack은 결과 publish가 confirm된 뒤에만. 파이프라인(임베딩·LLM)은 `to_thread`로 돌려 heartbeat를 막지 않는다.
+
+| 상황 | 워커 동작 | 메시지 행방 | 확인 |
+|---|---|---|---|
+| 정상 | `pipeline.answer` → `ai_results` publish(confirm) → ack | ai_tasks 0, ai_results +1 | test_a, 수동(실제 LLM 17.8s) |
+| 파이프라인 예외(LLM 타임아웃 90s·네트워크·버그), retry n<3 | 원본 복사 + `x-retry-count=n+1`, `x-last-error` → `ai_tasks.retry.{5s,25s,125s}` publish → ack | TTL 뒤 DLX로 `ai_tasks` 복귀(`x-death` 헤더에 expired 기록) | test_b (5s 복귀 확인) |
+| 예외, retry ≥3 | `x-retry-count=4` → `ai_tasks.dlq` publish → ack | DLQ, 원문·헤더 보존 | test_c |
+| 독 메시지(InboundEvent로 안 읽힘) | 재시도 없이 `ai_tasks.dlq`(`x-last-error: poison: …`) → ack | DLQ | test_d |
+| 재시도/DLQ publish 자체 실패(브로커 단절) | ack 못 함, 예외 로그 | unacked → 연결 끊기면 브로커가 requeue | — |
+| 워커가 손도 못 댐(nack requeue=False, 큐 초과) | — | `ai_tasks` DLX → `events.dlx` → `ai_tasks.dlq` | 토폴로지 |
+| SIGTERM/SIGINT | consumer cancel → 처리 중 1건 완료·ack 대기(`WORKER_DRAIN_TIMEOUT` 120s) → 연결 종료 | 답은 ai_results에 도착, ai_tasks 0 | test_e, 수동(LLM 호출 중 Ctrl+C) |
+| drain 타임아웃 초과 | 경고 로그, unacked로 두고 종료 | 연결 끊기며 브로커가 requeue → 다른 워커가 재처리 (멱등성 Step 5 전엔 중복 답 가능) | — |
+| 같은 event_id 재전송(Slack 재전송·재큐·워커 재시작) | Redis `SET idem:{event_id} NX EX 86400` 실패 → "duplicate, ack only" — 파이프라인·ai_results 없음 | ack, 답 1건만 | test_f |
+| Redis 불가 | WARNING "idempotency guard disabled" 후 가드 없이 처리 | 정상 처리(중복 답 가능) | test_g |
+
+### 멱등성 키 (`worker.main.IdempotencyGuard`, Step 5)
+
+| 시점 | 키 `idem:{event_id}` | 이유 |
+|---|---|---|
+| 수신 직후 | `SET … processing:{epoch} NX EX 86400` | 성공해야 처리. 실패면 중복 |
+| 처리 성공(ack 뒤) | 값 `done`, TTL 24h 유지 | Slack 재전송 창은 3초지만 재큐·워커 재시작은 그보다 늦게 같은 event_id를 다시 가져온다 |
+| 처리 실패(retry/dlq로 보냄) | `DEL` | 재시도 메시지는 같은 event_id — 키가 남으면 재시도가 영원히 "중복" |
+| 중복인데 값이 `processing:`이고 `WORKER_STALE_PROCESSING_SEC`(300s) 넘게 오래됨 | 덮어쓰고 재처리 (WARNING "stale processing key") | 전 워커가 처리 중 죽은 흔적(ack 못 함 → 브로커 requeue). LLM 90s + drain 120s보다 길게 잡아 정상 처리 중인 다른 워커와 구분 |
+| 중복인데 `processing:` 최근 | 중복 (ack only) | 다른 워커가 지금 처리 중 |
+| Redis 연결 실패·타임아웃(1s) | 가드 없이 처리, WARNING | 가드 때문에 서비스가 멈추지 않게. 대가는 중복 답 가능성 |
+
+**웹훅에는 가드를 두지 않는다.** 큐 앞에서 거르면 "publish 실패로 Slack이 재전송한 것"과 "이미 큐에 들어간 것의 재전송"을 구분할 수 없다 — 전자를 중복으로 버리면 질문이 유실된다. 웹훅은 항상 publish하고, 중복 제거는 소비 지점(워커) 한 곳에서만 한다. 알려진 틈: 결과 publish(confirm)와 `mark_done` 사이에 워커가 죽으면 키는 `processing`으로 남고 메시지는 ack됐으므로 중복 답은 없다; 결과 publish 전에 죽으면 unacked → requeue → 300s 뒤 재처리. 그 사이에 들어온 재전송만 중복으로 걸러진다.
+
+쓰지 않는 것: `nack(requeue=True)` — 같은 실패를 즉시 반복하고 횟수를 셀 수 없다. 재시도 간격은 브로커 TTL 큐가, 횟수는 `x-retry-count` 헤더가 맡는다.
+no_match는 실패가 아니다: 검색 결과 없음/최고 점수 < `MIN_SCORE`(0.45) 또는 LLM이 인용 없이 "유사 이력 없음" → `status=no_match`로 정상 publish.
