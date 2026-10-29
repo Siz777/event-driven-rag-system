@@ -5,7 +5,7 @@
       → event_callback → InboundEvent 변환(실패 시 200 ignored + 로그) → publish(503) → 202
       → 처리 대상 아니면 200 ignored (Slack은 2xx가 아니면 재전송하므로 무시도 2xx로 답한다)
 
-publish는 주입(create_app(publish=...)). 기본은 로그만 — Step 3에서 RabbitMQ publish로 교체.
+publish는 주입(create_app(publish=...)). 기본(None)은 RabbitMQ Publisher(RABBITMQ_URL) — 첫 요청 때 연결, 종료 시 닫음.
 실행: uvicorn api.webhook:app --port 8000
 """
 from __future__ import annotations
@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from contextlib import asynccontextmanager
 from typing import Awaitable, Callable
 
 from dotenv import load_dotenv
@@ -22,20 +23,26 @@ from pydantic import ValidationError
 
 from api import slack
 from events import InboundEvent
+from mq.publisher import Publisher
 
 log = logging.getLogger("api.webhook")
 
-Publisher = Callable[[InboundEvent], Awaitable[None]]
+PublishFn = Callable[[InboundEvent], Awaitable[None]]
 
 
-async def log_only(ev: InboundEvent) -> None:
-    log.info("inbound (not published, Step 3 pending) %s", ev.to_json())
+def create_app(*, signing_secret: str | None = None, publish: PublishFn | None = None,
+               rabbitmq_url: str | None = None) -> FastAPI:
+    publisher = Publisher(rabbitmq_url) if publish is None else None
 
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        yield
+        if publisher is not None:
+            await publisher.close()
 
-def create_app(*, signing_secret: str | None = None, publish: Publisher = log_only) -> FastAPI:
-    app = FastAPI(title="event-driven-rag webhook")
+    app = FastAPI(title="event-driven-rag webhook", lifespan=lifespan)
     app.state.signing_secret = signing_secret
-    app.state.publish = publish
+    app.state.publish = publish if publish is not None else publisher.publish
 
     @app.get("/health")
     async def health():
@@ -89,4 +96,4 @@ def create_app(*, signing_secret: str | None = None, publish: Publisher = log_on
 
 load_dotenv()
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-app = create_app(signing_secret=os.getenv("SLACK_SIGNING_SECRET"))
+app = create_app(signing_secret=os.getenv("SLACK_SIGNING_SECRET"), rabbitmq_url=os.getenv("RABBITMQ_URL"))
