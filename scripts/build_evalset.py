@@ -1,6 +1,6 @@
 """평가셋 생성. 난이도별 질의 + 정답 티켓.
 정답 정의: 같은 cause_id의 모든 티켓 ("이 장애 전에 있었나?" 의미). source_ticket_id는 MRR용.
-사용: python -m scripts.build_evalset --per-difficulty 30   (--negatives-only: negative만 교체)
+사용: python -m scripts.build_evalset --per-difficulty 30   (--negatives-only: negative만 교체, --difficulty X --count N: X만 추가)
 negative: hard(카탈로그 설비지만 목록 외 상황, 설비별 균등) + easy(타 설비·유틸리티·IT·안전), neg_type 필드로 구분.
 """
 import argparse
@@ -36,7 +36,9 @@ JSON만: {{"query": "..."}}
 
 RULES = {
     "exact": "- 증상의 핵심 표현(용어·수치)은 그대로 유지하고 문장만 질문으로 바꾼다.",
-    "paraphrase": "- 티켓에 나온 명사를 되도록 쓰지 않는다.\n- 같은 상황을 현장에서 체감하는 방식(소리·시간·화면 표시·결과물)으로 묘사한다.",
+    # 현실적 paraphrase: 용어는 유지, 문장만 다시 씀. (초기 버전의 "명사 쓰지 않기"는 수수께끼 질의를 만들어 paraphrase_hard로 분리)
+    "paraphrase": "- 웨이퍼·챔버·압력·온도·척·He·펌프다운 등 현장 용어는 그대로 쓴다.\n- 티켓 문장·어순을 복사하지 말고, 오퍼레이터가 슬랙에 상황을 설명하듯 다시 쓴다.\n- 비유·완곡 표현 금지.",
+    "paraphrase_hard": "- 티켓에 나온 명사를 되도록 쓰지 않는다.\n- 같은 상황을 현장에서 체감하는 방식(소리·시간·화면 표시·결과물)으로 묘사한다.",
     "multi_hop": "- 과거 이력을 종합해야 답할 수 있게 묻는다 (예: 이 증상의 평균 다운타임, 가장 흔한 조치, 어떤 설비에서 자주 났는지).\n- 증상 묘사는 짧게, 질문의 초점은 집계·패턴에 둔다.",
 }
 PROMPTS = {d: QUERY_TMPL.replace("{rules}", r) for d, r in RULES.items()}
@@ -101,10 +103,34 @@ def main():
     ap.add_argument("--negatives-only", action="store_true",
                     help="기존 eval.jsonl의 negative 행만 교체 (positive 질의는 유지)")
     ap.add_argument("--hard-only", action="store_true", help="--negatives-only와 함께: hard만 교체, easy 유지")
+    ap.add_argument("--difficulty", choices=list(RULES), help="이 난이도만 생성해 기존 eval.jsonl에 추가")
+    ap.add_argument("--count", type=int, default=None, help="--difficulty와 함께: 생성 수 (기본 --per-difficulty)")
     args = ap.parse_args()
     random.seed(args.seed)
     cat = load_catalog()
     eval_path = config.EVAL_DIR / "eval.jsonl"
+
+    if args.difficulty:
+        rows = load_jsonl(eval_path) if eval_path.exists() else []
+        tickets = load_tickets()
+        by_cause = defaultdict(list)
+        for t in tickets:
+            by_cause[t["cause_id"]].append(t["ticket_id"])
+        n = args.count or args.per_difficulty
+        used = {r["source_ticket_id"] for r in rows if r["difficulty"] == args.difficulty}
+        pool = [t for t in tickets if t["ticket_id"] not in used]
+        added = 0
+        for t in tqdm(random.sample(pool, min(n, len(pool))), desc=args.difficulty):
+            try:
+                q = chat_json(PROMPTS[args.difficulty].format(symptom=t["symptom"]), temperature=0.8)["query"]
+            except Exception:
+                continue
+            rows.append({"query": q, "difficulty": args.difficulty, "source_ticket_id": t["ticket_id"],
+                         "relevant_ticket_ids": by_cause[t["cause_id"]], "cause_id": t["cause_id"], "source": "llm"})
+            added += 1
+        save_jsonl(eval_path, rows)
+        print(f"added {added} {args.difficulty} rows -> {len(rows)} total")
+        return
 
     if args.negatives_only:
         old = load_jsonl(eval_path)
@@ -126,6 +152,8 @@ def main():
     rows = []
 
     for diff, instr in PROMPTS.items():
+        if diff == "paraphrase_hard":          # 기본 생성은 exact/paraphrase/multi_hop. hard는 --difficulty로 별도
+            continue
         sample = random.sample(tickets, min(args.per_difficulty, len(tickets)))
         for t in tqdm(sample, desc=diff):
             try:

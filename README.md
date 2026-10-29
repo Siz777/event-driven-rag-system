@@ -28,7 +28,7 @@ flowchart LR
 
 | 검색 방식 | Recall@5 (합성 티켓) | Recall@5 (GitHub 이슈) |
 |---|---|---|
-| 벡터 only | 0.853 (paraphrase 0.60) <!-- 2026-10-29, 177c16c, bge-m3, doc_text=full, eval 109 positive --> | TBD |
+| 벡터 only | overall 0.885 / paraphrase 1.0 / paraphrase_hard 0.60 <!-- 2026-10-29, bge-m3, doc_text=full, eval 139 positive (exact·paraphrase·paraphrase_hard·multi_hop 30 + human 19); baseline 177c16c was 0.853 before paraphrase split --> | TBD |
 | BM25 only | TBD | TBD |
 | 하이브리드 (RRF) | TBD | TBD |
 
