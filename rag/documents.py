@@ -32,9 +32,16 @@ def load_tickets(clean: bool = True) -> list[dict]:
     return load_jsonl(path)
 
 
-def doc_text(t: dict) -> str:
+def doc_text(t: dict, mode: str | None = None) -> str:
     """임베딩·BM25에 들어가는 문서 표현. 티켓 하나 = 청크 하나.
-    root_cause를 넣으면 검색이 너무 쉬워지므로 증상·조치 기록만 쓴다."""
+    root_cause를 넣으면 검색이 너무 쉬워지므로 증상·조치 기록만 쓴다.
+    mode(기본 config.DOC_TEXT_MODE): full = 설비+증상+조치 기록+조치 결과 / symptom_only = 증상만
+    (조치 기록에 부품명이 들어가 검색을 쉽게 만드는지 보는 실험용)."""
+    mode = mode or config.DOC_TEXT_MODE
+    if mode == "symptom_only":
+        return f"증상: {t['symptom']}"
+    if mode != "full":
+        raise ValueError(f"unknown DOC_TEXT_MODE: {mode}")
     return (
         f"설비: {t['equipment_type']} {t['equipment_id']}\n"
         f"증상: {t['symptom']}\n"

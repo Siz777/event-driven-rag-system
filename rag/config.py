@@ -40,6 +40,9 @@ def _slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", s.lower()).strip("_")
 
 
-# 컬렉션 이름에 임베딩 모델을 박아두어 모델 교체 사고를 방지
-COLLECTION = f"{DOMAIN}_{_slug(EMBED_MODEL)}_v1"
+# 문서 표현 모드 (rag/documents.doc_text): full = 설비+증상+조치 기록+조치 결과, symptom_only = 증상만
+DOC_TEXT_MODE = os.getenv("DOC_TEXT_MODE", "full")
+
+# 컬렉션 이름에 임베딩 모델(+문서 모드)을 박아두어 모델·표현 교체 사고를 방지. full은 기존 이름 유지
+COLLECTION = f"{DOMAIN}_{_slug(EMBED_MODEL)}" + ("" if DOC_TEXT_MODE == "full" else f"_{DOC_TEXT_MODE}") + "_v1"
 TOP_K = int(os.getenv("TOP_K", "5"))
