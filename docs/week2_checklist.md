@@ -49,16 +49,26 @@ Step은 작업 단계이며 달력 날짜와 무관. 진행 날짜는 docs/log/ 
 - [ ] 확인: 워커에서 강제 예외 → retry 큐 경유 3회 → DLQ에 1건, 메시지 원문 보존
 - [ ] 산출물: 큐 3개 토폴로지 그림(docs/events.md) + DLQ 도달 확인 기록
 
+## Step 6 (Docker) — 컨테이너 전체 경로
+- [x] `Dockerfile.api`(python:3.12-slim, requirements-api.txt만, HEALTHCHECK /health) / `Dockerfile.worker`(torch CPU 휠 고정, HEALTHCHECK ready 파일). CMD exec form, worker `init: true`, `stop_grace_period: 150s`
+- [x] bge-m3는 `~/.cache/huggingface` 마운트, 티켓 데이터는 `./domains:ro` 마운트 — 이미지에 안 넣음(워커 이미지 /app 288KB)
+- [x] `docker-compose.yml` 전체: rabbitmq·redis·qdrant·api·worker, `env_file: .env`, `depends_on` service_healthy, `QDRANT_URL=http://qdrant:6333`
+- [x] `docker compose up --build` → 5개 healthy → `docker compose run --rm worker python -m rag.index`(318건) → 서명된 curl → ai_results 1건 (25.5s, 인용 5)
+- [x] 처리 중 `docker compose stop worker` → SIGTERM 전달 → draining… done → exit 0 (16s). ai_tasks 0, ai_results 2
+- [x] README 실행을 compose 기준으로, 로컬은 "개발용"으로 분리
+
 ## Step 7 — graceful shutdown
 - [x] SIGTERM 수신 시: 새 메시지 소비 중단 → 처리 중인 1건 완료·ack → 연결 종료. 타임아웃 120s(WORKER_DRAIN_TIMEOUT) (Step 4에서 구현)
 - [ ] 확인: 처리 중(LLM 호출 중) SIGTERM → 답변이 outbound에 도착하고 중복 없음. 타임아웃 초과 시 nack → 재시도 경로
 - [ ] 산출물: 종료 핸들러 + 처리 중 종료 테스트 기록
 
 ## Step 8 — Slack Socket Mode 어댑터
-- [ ] `adapters/slack.py`: Socket Mode로 멘션·DM 수신 → InboundEvent → 웹훅(또는 직접 publish). outbound 소비 → 스레드 답글
-- [ ] 봇 토큰·앱 토큰은 .env, 채널 허용 목록
-- [ ] 확인: Slack에서 "펌프다운이 평소보다 오래 걸리는데" → 스레드에 [INC-xxxx] 인용 답변. 워커 kill 후 재시작해도 답변 도착
-- [ ] 산출물: 어댑터 + 실제 Slack 왕복 1건 스크린샷/로그 + README 실행 절차 갱신
+- [x] `adapters/slack_socket.py`(Bolt AsyncApp, `api.slack.to_inbound` 재사용, source=slack_socket) → 직접 publish → "검색 중…" progress(say thread_ts). `adapters/slack_reply.py`: ai_results 소비 → chat.postMessage(thread_ts=reply_to) → 성공 뒤 ack. `adapters/slack_main.py` 한 프로세스
+- [x] 봇 토큰·앱 토큰은 .env(`SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN`), 채널 허용 목록 `SLACK_ALLOWED_CHANNELS`. compose `slack` 서비스(Dockerfile.slack, requirements-slack.txt), healthy 확인
+- [x] 계약: `reply_to`를 새 질문이면 메시지 ts로(전엔 null → Slack에 달 곳 없음), status에 `progress` 추가
+- [x] 테스트 16개(to_inbound 재사용·handle_event 무시/허용목록/publish 실패·format_reply 4종·ReplyConsumer ack/nack 규칙)
+- [x] 확인(수동): 17:52 왕복 성공 latency 21.8s(postMessage). 18:03 재확인 18.6s(chat.update로 "검색 중…"이 답변으로 바뀜), 폴백(message_not_found → 새 답글)도 확인. Slack #incident-test에서 "@incident-bot 펌프다운이 평소보다 오래 걸리는데" → "검색 중…" → 스레드에 [INC-xxxx] 인용 답변. 워커 kill 후 재시작해도 답변 도착
+- [ ] 산출물: 실제 Slack 왕복 1건 스크린샷/로그(latency_from_question) + README 실행 절차 갱신(갱신함)
 
 ## 주차 마무리
 - [ ] `docs/events.md` 완성: 계약, 큐 토폴로지, 실패 경로(재시도·DLQ·중복·종료) 표

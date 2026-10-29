@@ -51,7 +51,7 @@ def test_app_mention_accepted_and_converted(ctx):
     assert ev.channel == "C0123FAB" and ev.user == "U0456ENG"
     assert ev.text == "펌프다운이 평소보다 오래 걸리는데 예전에 비슷한 일 있었어?"   # 멘션 제거 + strip
     assert ev.ts.tzinfo is not None and ev.ts.timestamp() == pytest.approx(1793232753.123456, abs=1e-6)
-    assert ev.reply_to is None
+    assert ev.reply_to == "1793232753.123456"          # 새 질문: 메시지 ts가 스레드
     assert InboundEvent.from_json(ev.to_json()) == ev
 
 

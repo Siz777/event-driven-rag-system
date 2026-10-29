@@ -33,10 +33,10 @@
 | event_id | str | 기본 uuid4 | 답 이벤트 자체의 ID |
 | in_reply_to | str | ✔ | 답하는 `InboundEvent.event_id` |
 | channel | str | ✔ | inbound에서 복사(불투명 문자열). 답 보내는 쪽이 inbound를 다시 조회하지 않게 |
-| reply_to | str \| null | 기본 null | 답을 달 스레드. `inbound.reply_to` 있으면 그 값, 없으면 `inbound.event_id` |
+| reply_to | str \| null | 기본 null | 답을 달 스레드(Slack thread_ts). `inbound.reply_to` 있으면 그 값, 없으면 `inbound.event_id`. Slack 어댑터는 항상 질문 메시지 ts를 넣으므로 실제로는 늘 thread_ts |
 | text | str (≤4000) | ✔ | 답변 본문. `status=answered`면 비어 있을 수 없음 |
 | citations | list[Citation] | 기본 [] | 근거 티켓. `Citation = {ticket_id: "INC-…", score: float\|null (−1~1)}` |
-| status | `answered` \| `no_match` \| `error` | ✔ | answered: 근거 있는 답 / no_match: "유사 이력 없음" / error: 처리 실패. `progress`(처리 중 알림)는 Step 7 graceful shutdown과 함께 추가 예정 |
+| status | `answered` \| `no_match` \| `error` \| `progress` | ✔ | answered: 근거 있는 답 / no_match: "유사 이력 없음" / error: 처리 실패 / progress: "검색 중…" 같은 중간 알림(Step 7 추가. 지금은 Socket 어댑터가 큐를 거치지 않고 직접 보낸다) |
 | error | str \| null | status=error면 ✔ | 실패 사유. status≠error면 있으면 안 됨 |
 | ts | datetime (tz-aware) | 기본 now(UTC) | 답 생성 시각 |
 
@@ -91,7 +91,21 @@ OutboundEvent (`inbound.reply(...)`로 생성)
 | publish 예외 | 503 | 큐 장애를 삼키지 않는다. Slack이 재전송(X-Slack-Retry-Num) |
 | 정상 | 202 `{event_id}` | 큐에 들어갔다는 뜻. 답은 비동기 |
 
-처리 대상: `app_mention`, DM(`message` + `channel_type=im`). 멘션 토큰(`<@U…>`)은 제거. `event_id`=Slack event_id, `ts`=event.ts(epoch→UTC), `reply_to`=thread_ts.
+처리 대상: `app_mention`, DM(`message` + `channel_type=im`). 멘션 토큰(`<@U…>`)은 제거. `event_id`=Slack event_id, `ts`=event.ts(epoch→UTC), `reply_to`=thread_ts(스레드 안 질문) 또는 메시지 ts(새 질문) — 답은 항상 질문 스레드에 달린다(Step 7에서 바꿈. 전에는 새 질문이면 null이라 Slack에 달 곳이 없었다).
+
+## 2-b. 입구·출구: Slack Socket Mode (`adapters/`, Step 7)
+
+웹훅 대신 WebSocket(앱 토큰 `xapp-`)으로 받는다 — 공개 URL·서명 검증 불필요. 한 프로세스(`python -m adapters.slack_main`, compose `slack` 서비스)가 둘을 돈다.
+
+| 구성 | 역할 | 실패 시 |
+|---|---|---|
+| `slack_socket.py` (Bolt AsyncApp) | app_mention·DM → `api.slack.to_inbound(source="slack_socket")` 재사용 → `ai_tasks` publish → 질문 스레드에 "검색 중…" | publish 실패: 사용자에게 "접수 불가" 한 줄 + ERROR 로그. Bolt가 이미 envelope ack → Slack 재전송 없음 → **질문 유실**(웹훅의 503 재전송과 다름, 의도적 단순화) |
+| `slack_reply.py` (ReplyConsumer) | `ai_results` 소비 → `format_reply` → Redis `progress:{in_reply_to}`에 "검색 중…" 메시지 ts가 있으면 `chat.update`(그 메시지가 답으로 바뀜), 없으면 `chat.postMessage(thread_ts=reply_to)` → **전송 성공 뒤 ack**, 키 삭제 | 영구 오류(channel_not_found·not_in_channel·invalid_auth…): 로그 + ack(폐기). 일시 오류(ratelimited·네트워크): 2s 뒤 nack(requeue). 독 메시지: 로그 + ack |
+
+답글 포맷: answered = 본문 + `근거 티켓: INC-…` 줄 / no_match = "유사 이력 없음 — …" 문구(+파이프라인 본문) / error = "답변 생성에 실패했습니다…(사유)" / progress = 본문 그대로.
+progress ts는 `adapters/progress.py`(Redis, TTL 1h, 실패 시 폴백=새 답글). update가 message_not_found면 새 답글로 폴백, 레이트리밋이면 nack requeue(키 유지).
+Socket 재전송으로 같은 event_id가 두 번 오면 워커 멱등 가드가 거른다(progress는 두 번 찍힐 수 있음). 채널 허용 목록 `SLACK_ALLOWED_CHANNELS`(비우면 전부).
+지연 측정: `reply_to`가 Slack 메시지 ts(epoch)라 답글 소비자가 `latency_from_question`을 로그에 찍는다.
 
 ## 3. 큐 토폴로지 (`mq/topology.py`, `declare()` 한 번으로 멱등 선언)
 

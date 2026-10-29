@@ -10,6 +10,7 @@
 - 모르는 필드는 거부(extra="forbid"). 오타가 조용히 버려지는 것보다 422가 낫다.
 - version은 Literal로 고정. 형식이 바뀌면 숫자를 올리고 소비자가 명시적으로 분기한다.
 - source는 비어 있지 않은 문자열. 어댑터 목록은 계약이 아니라 라우터(Step 2)가 안다.
+- reply_to는 Slack thread_ts(메시지 ts). 어댑터가 질문 메시지 ts를 넣으므로 답은 항상 질문 스레드에 달린다.
 - OutboundEvent는 channel/reply_to를 inbound에서 복사해 들고 다닌다.
   답을 보내는 쪽(Slack 어댑터)이 inbound를 다시 조회하지 않아도 되게 — 소비자는 상태가 없어야 재시작이 쉽다.
 """
@@ -23,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 SCHEMA_VERSION = 1
 
-Status = Literal["answered", "no_match", "error"]
+Status = Literal["answered", "no_match", "error", "progress"]   # progress: "검색 중…" 같은 중간 알림(어댑터가 직접 보냄)
 
 
 def _utcnow() -> datetime:

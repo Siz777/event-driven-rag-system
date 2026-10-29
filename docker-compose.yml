@@ -1,7 +1,7 @@
-# 전체 경로: api(웹훅) → rabbitmq → worker(bge-m3 + qdrant + LLM) → ai_results.  redis는 멱등성 키.
+# 전체 경로: slack(Socket Mode) 또는 api(웹훅) → rabbitmq → worker(bge-m3 + qdrant + LLM) → ai_results → slack(스레드 답글).  redis는 멱등성 키.
 #   docker compose up --build -d
 #   docker compose run --rm worker python -m rag.index     # 최초 1회: 티켓을 qdrant 서비스에 적재
-# .env의 LLM_*·SLACK_SIGNING_SECRET을 그대로 쓴다. *_URL은 아래 environment가 서비스명으로 덮어쓴다.
+# .env의 LLM_*·SLACK_SIGNING_SECRET·SLACK_BOT_TOKEN·SLACK_APP_TOKEN을 그대로 쓴다. *_URL은 아래 environment가 서비스명으로 덮어쓴다.
 services:
   rabbitmq:
     image: rabbitmq:3.13-management
@@ -61,6 +61,17 @@ services:
       rabbitmq: { condition: service_healthy }
       redis: { condition: service_healthy }
       qdrant: { condition: service_healthy }
+
+  slack:
+    build: { context: ., dockerfile: Dockerfile.slack }
+    init: true
+    env_file: .env
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      REDIS_URL: redis://redis:6379/0   # "검색 중…" 메시지 ts(progress:{event_id}, 1h) — 답을 chat.update로
+    depends_on:
+      rabbitmq: { condition: service_healthy }
+      redis: { condition: service_healthy }
 
 volumes:
   qdrant_data:

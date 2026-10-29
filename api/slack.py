@@ -47,9 +47,10 @@ def _ts_to_datetime(ts: str) -> datetime:
     return datetime.fromtimestamp(float(ts), tz=timezone.utc)
 
 
-def to_inbound(payload: dict) -> InboundEvent | None:
+def to_inbound(payload: dict, *, source: str = "slack") -> InboundEvent | None:
     """event_callback → InboundEvent. 처리 대상이 아니면 None (봇 메시지, 서브타입, 미지 타입, DM 아닌 message).
-    변환은 하되 검증은 InboundEvent에 맡긴다 — 빈 텍스트 등은 ValidationError로 올라간다."""
+    변환은 하되 검증은 InboundEvent에 맡긴다 — 빈 텍스트 등은 ValidationError로 올라간다.
+    reply_to는 thread_ts(스레드 안 질문) 또는 메시지 ts(새 질문) — 답은 항상 질문 스레드에 단다."""
     ev = payload.get("event") or {}
     kind = ev.get("type")
     if kind not in HANDLED_EVENTS:
@@ -61,10 +62,10 @@ def to_inbound(payload: dict) -> InboundEvent | None:
     text = _MENTION.sub("", ev.get("text", ""))
     return InboundEvent(
         event_id=payload.get("event_id", ""),
-        source="slack",
+        source=source,
         channel=ev.get("channel", ""),
         user=ev.get("user", ""),
         text=text,
         ts=_ts_to_datetime(ev["ts"]) if ev.get("ts") else datetime.now(timezone.utc),
-        reply_to=ev.get("thread_ts"),
+        reply_to=ev.get("thread_ts") or ev.get("ts"),
     )

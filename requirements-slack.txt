@@ -1,0 +1,7 @@
+# Slack 어댑터 컨테이너 전용(임베딩·LLM 없음). 전체 목록은 requirements.txt
+slack-bolt>=1.20
+aiohttp>=3.9
+aio-pika>=9.4
+pydantic>=2.7
+python-dotenv>=1.0
+redis>=5.0
