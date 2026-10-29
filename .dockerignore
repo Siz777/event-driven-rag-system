@@ -1,0 +1,11 @@
+.git
+.venv
+.qdrant
+__pycache__
+**/__pycache__
+*.pyc
+.env
+docs
+node_modules
+tests
+domains/*/data/*.jsonl

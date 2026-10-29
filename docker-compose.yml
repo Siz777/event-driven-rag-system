@@ -1,12 +1,8 @@
+# 전체 경로: api(웹훅) → rabbitmq → worker(bge-m3 + qdrant + LLM) → ai_results.  redis는 멱등성 키.
+#   docker compose up --build -d
+#   docker compose run --rm worker python -m rag.index     # 최초 1회: 티켓을 qdrant 서비스에 적재
+# .env의 LLM_*·SLACK_SIGNING_SECRET을 그대로 쓴다. *_URL은 아래 environment가 서비스명으로 덮어쓴다.
 services:
-  # 1주차엔 선택. QDRANT_URL=http://localhost:6333 으로 바꾸면 사용.
-  qdrant:
-    image: qdrant/qdrant:v1.12.4
-    ports: ["6333:6333"]
-    volumes: ["qdrant_data:/qdrant/storage"]
-
-  # 2주차: 이벤트 큐. 5672 AMQP, 15672 관리 UI (guest/guest, localhost만)
-  # docker compose up -d rabbitmq
   rabbitmq:
     image: rabbitmq:3.13-management
     ports: ["5672:5672", "15672:15672"]
@@ -17,7 +13,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # 2주차 Step 5: 멱등성 키(idem:{event_id}, 24h). 유실돼도 중복 답 위험만 생기고 서비스는 돈다
   redis:
     image: redis:7-alpine
     ports: ["6379:6379"]
@@ -28,6 +23,44 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    ports: ["6333:6333"]
+    volumes: ["qdrant_data:/qdrant/storage"]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: { context: ., dockerfile: Dockerfile.api }
+    ports: ["8000:8000"]
+    env_file: .env
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-}   # 셸 변수가 있으면 .env보다 우선 (테스트용)
+    depends_on:
+      rabbitmq: { condition: service_healthy }
+
+  worker:
+    build: { context: ., dockerfile: Dockerfile.worker }
+    init: true                   # tini가 PID 1: SIGTERM을 python에 전달, 좀비 회수
+    stop_grace_period: 150s      # drain 120s + 여유. 넘으면 SIGKILL
+    env_file: .env
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_URL: http://qdrant:6333
+      JUDGE_BASE_URL: ""         # 로컬 Ollama는 컨테이너에서 안 보임. 워커는 심판을 쓰지 않는다
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface   # bge-m3 가중치(호스트 캐시 재사용)
+      - ./domains:/app/domains:ro                       # 카탈로그·프롬프트·티켓 jsonl(gitignore)
+    depends_on:
+      rabbitmq: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      qdrant: { condition: service_healthy }
 
 volumes:
   qdrant_data:

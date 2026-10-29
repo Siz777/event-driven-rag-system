@@ -1,0 +1,28 @@
+# 워커: ai_tasks → pipeline(bge-m3 + Qdrant + LLM) → ai_results
+# 모델 가중치(bge-m3 ~2GB)와 티켓 데이터는 이미지에 넣지 않고 볼륨으로 마운트한다 (compose 참조)
+FROM python:3.12-slim
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
+    HF_HOME=/root/.cache/huggingface \
+    WORKER_READY_FILE=/tmp/worker-ready
+WORKDIR /app
+COPY requirements.txt constraints-worker.txt ./
+
+# torch는 CPU 휠을 먼저 고정한다. PyPI 기본 aarch64 휠은 CUDA 런타임(nvidia-* 3.3GB + triton 0.9GB)을 끌고 와 이미지가 10GB가 된다
+RUN pip install --no-cache-dir torch==2.15.0 \
+      --index-url https://download.pytorch.org/whl/cpu
+
+# constraints로 requirements 해석 중 torch가 PyPI GPU 휠로 바뀌는 것을 막는다
+RUN pip install --no-cache-dir -c constraints-worker.txt -r requirements.txt
+
+# 안전장치: GPU용 torch나 nvidia 패키지가 섞이면 빌드 실패
+RUN python -c "import torch, sys; sys.exit(0 if torch.version.cuda is None else 'GPU torch detected')" \
+ && if pip list 2>/dev/null | grep -qi '^nvidia-'; then echo 'nvidia packages detected'; exit 1; fi
+COPY events/ events/
+COPY mq/ mq/
+COPY rag/ rag/
+COPY worker/ worker/
+COPY domains/ domains/
+HEALTHCHECK --interval=10s --timeout=3s --start-period=120s --retries=5 \
+  CMD ["test", "-f", "/tmp/worker-ready"]
+# exec form 필수: shell form이면 PID 1이 sh라 SIGTERM이 python에 안 간다. compose의 init: true가 tini로 신호를 전달
+CMD ["python", "-m", "worker.main"]

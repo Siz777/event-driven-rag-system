@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import pathlib
 import signal
 import threading
 import time
@@ -150,6 +151,8 @@ class Worker:
         log.info("consuming %s (prefetch %d), url %s, idempotency %s", topology.TASKS, self.prefetch,
                  self.url.split("@")[-1], "redis " + self.guard.url.split("@")[-1] if self.guard.url else "OFF")
         self.ready.set()
+        if os.getenv("WORKER_READY_FILE"):           # 컨테이너 healthcheck용
+            pathlib.Path(os.environ["WORKER_READY_FILE"]).touch()
 
         await self._stop.wait()
         log.info("stopping: cancelling consumer (no new messages)")
