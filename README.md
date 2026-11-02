@@ -28,9 +28,9 @@ flowchart LR
 
 | 검색 방식 | Recall@5 (합성 티켓) | Recall@5 (GitHub 이슈) |
 |---|---|---|
-| 벡터 only | overall 0.885 / paraphrase 1.0 / paraphrase_hard 0.60 <!-- 2026-10-29, bge-m3, doc_text=full, eval 139 positive (exact·paraphrase·paraphrase_hard·multi_hop 30 + human 19); baseline 177c16c was 0.853 before paraphrase split --> | TBD |
-| BM25 only | TBD | TBD |
-| 하이브리드 (RRF) | TBD | TBD |
+| 벡터 only | overall 0.885 / paraphrase 1.0 / paraphrase_hard 0.60 / human 0.842 <!-- 2026-10-29, bge-m3, doc_text=full, eval 139 positive (exact·paraphrase·paraphrase_hard·multi_hop 30 + human 19); baseline 177c16c was 0.853 before paraphrase split --> | TBD |
+| BM25 only | overall 0.856 / paraphrase 1.0 / paraphrase_hard 0.40 / human 0.947 <!-- 2026-11-02, Kiwi+bm25s, 사용자 사전 80, doc_text=full --> | TBD |
+| 하이브리드 (RRF) | overall 0.885 / paraphrase 1.0 / paraphrase_hard 0.567 / human 0.895 (R@1 0.784, MRR 0.656 — 셋 중 최고) <!-- 2026-11-02, vector top-20 + bm25 top-20, RRF k=60, 1:1 --> | TBD |
 
 <!-- 숫자는 domains/*/eval/experiments.jsonl 에서 가져온다. 측정 전엔 비워둔다. -->
 

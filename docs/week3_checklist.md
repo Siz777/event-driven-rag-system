@@ -20,9 +20,9 @@ Step은 작업 단계이며 달력 날짜와 무관. 진행 날짜는 docs/log/ 
 - [x] 산출물: BM25 단독 행 1개(experiments.jsonl) + 토크나이저 샘플 10개 기록 (사전 v2: 자동 검출 80개, SN 제거 — docs/experiments/kiwi_dictionary.md)
 
 ## Step 2 — 하이브리드 (RRF)
-- [ ] `rag/retrieve.py`: vector top-k·bm25 top-k → RRF(k=60) 병합 → top-5. 가중치는 1:1 고정(튜닝 금지 — 평가셋이 170행이라 과적합)
-- [ ] 평가: `--method hybrid`. 비교표: vector / bm25 / hybrid × (exact·paraphrase·paraphrase_hard·multi_hop·human·code)
-- [ ] 산출물: README 결과 표 3행 채움
+- [x] `rag/retrieve.py`: vector top-20·bm25 top-20 → RRF(k=60) 병합 → top-5. 가중치는 1:1 고정(튜닝 금지 — 평가셋이 170행이라 과적합)
+- [x] 평가: `--method hybrid`. 비교표: vector / bm25 / hybrid × 난이도 + 코드 질의 수동 3개 + negative 분포 (일지 11-02). hybrid R@1 0.784·MRR 0.656 최고, paraphrase_hard는 vector 0.6 > hybrid 0.567, 코드 단독은 bm25 5/5 > hybrid 3/5
+- [x] 산출물: README 결과 표 3행 채움
 
 ## Step 3 — 설비 메타데이터 필터
 - [ ] 질문에서 설비명·설비 ID 추출(사전 매칭, LLM 아님) → Qdrant payload filter + BM25 사후 필터. 추출 실패면 필터 없음
