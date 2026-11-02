@@ -6,7 +6,8 @@
 - 영구 오류(channel_not_found, not_in_channel, invalid_auth 등)는 재시도해도 같으므로 로그 남기고 ack(폐기).
 - 본문이 OutboundEvent로 안 읽히면 독 메시지: 로그 + ack.
 - 상태 없음: reply_to(thread_ts)·channel이 메시지 안에 있어 inbound 조회가 필요 없다 → 언제든 재시작 가능.
-- 지연 로그: reply_to가 Slack 메시지 ts(epoch)라 "질문 → 스레드 답" 왕복 시간을 그 자리에서 계산한다.
+- 지연 로그: asked_at(질문 원본 ts) 기준으로 "질문 → 스레드 답" 왕복 시간을 계산한다. asked_at이 없으면(구버전 메시지)
+  reply_to(Slack ts, epoch)로 폴백 — 스레드 안 질문은 root 기준이라 부정확.
 """
 from __future__ import annotations
 
@@ -128,7 +129,7 @@ class ReplyConsumer:
         if self.progress is not None:
             await self.progress.delete(out.in_reply_to)
         log.info("%s %s status=%s citations=%d channel=%s thread=%s%s", how, out.in_reply_to, out.status,
-                 len(out.citations), out.channel, out.reply_to, _latency_note(out.reply_to))
+                 len(out.citations), out.channel, out.reply_to, _latency_note(out))
 
     async def _deliver(self, out: OutboundEvent, text: str) -> str:
         """progress 메시지가 있으면 update, 아니면 post. 돌려주는 값은 로그용 'updated'/'posted'."""
@@ -147,9 +148,11 @@ class ReplyConsumer:
         return "posted"
 
 
-def _latency_note(thread_ts: str | None) -> str:
-    """reply_to가 Slack 메시지 ts(epoch 초)면 질문 → 답글 왕복 시간."""
+def _latency_note(out: OutboundEvent) -> str:
+    """질문 → 답글 왕복 시간. asked_at 우선, 없으면 reply_to(Slack 메시지 ts, epoch 초) 폴백."""
+    if out.asked_at is not None:
+        return f" latency_from_question={time.time() - out.asked_at.timestamp():.1f}s"
     try:
-        return f" latency_from_question={time.time() - float(thread_ts or ''):.1f}s"
+        return f" latency_from_question={time.time() - float(out.reply_to or ''):.1f}s (from reply_to)"
     except ValueError:
         return ""

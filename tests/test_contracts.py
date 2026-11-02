@@ -28,6 +28,7 @@ OUTBOUND = {
     "citations": [{"ticket_id": "INC-2026-0012", "score": 0.71}, {"ticket_id": "INC-2026-0015", "score": 0.66}],
     "status": "answered",
     "ts": "2026-10-29T00:12:40Z",
+    "asked_at": "2026-10-29T09:12:33.123456+09:00",
 }
 
 
@@ -91,6 +92,19 @@ def test_reply_copies_routing_fields():
 
     inb2 = InboundEvent.model_validate({**INBOUND, "reply_to": "1730000000.000100"})
     assert inb2.reply("답").reply_to == "1730000000.000100"
+
+
+def test_reply_carries_asked_at_and_roundtrips():
+    inb = InboundEvent.model_validate(INBOUND)
+    out = inb.reply("답")
+    assert out.asked_at == inb.ts                       # 스레드 안 질문이어도 질문 원본 ts
+    back = OutboundEvent.from_json(out.to_json())
+    assert back.asked_at == inb.ts and back.asked_at.utcoffset() == timedelta(hours=9)
+    # 구버전 메시지(asked_at 없음)도 version 1 그대로 읽힌다
+    legacy = {k: v for k, v in OUTBOUND.items() if k != "asked_at"}
+    assert OutboundEvent.model_validate(legacy).asked_at is None
+    with pytest.raises(ValidationError):                # naive 거부
+        OutboundEvent.model_validate({**OUTBOUND, "asked_at": "2026-10-29T09:12:33"})
 
 
 def test_outbound_status_rules():

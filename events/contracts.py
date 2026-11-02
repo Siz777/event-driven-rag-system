@@ -13,6 +13,8 @@
 - reply_to는 Slack thread_ts(메시지 ts). 어댑터가 질문 메시지 ts를 넣으므로 답은 항상 질문 스레드에 달린다.
 - OutboundEvent는 channel/reply_to를 inbound에서 복사해 들고 다닌다.
   답을 보내는 쪽(Slack 어댑터)이 inbound를 다시 조회하지 않아도 되게 — 소비자는 상태가 없어야 재시작이 쉽다.
+- asked_at은 InboundEvent.ts 복사본(선택). reply_to는 스레드 root ts라 스레드 안 질문의 지연 계산에 못 쓴다.
+  필드 추가 + 기본 None은 하위 호환이라 version은 1 그대로.
 """
 from __future__ import annotations
 
@@ -75,7 +77,7 @@ class InboundEvent(_Event):
         """이 질문에 대한 답 이벤트. channel/reply_to를 복사하고 in_reply_to를 채운다."""
         return OutboundEvent(
             in_reply_to=self.event_id, channel=self.channel,
-            reply_to=self.reply_to or self.event_id,
+            reply_to=self.reply_to or self.event_id, asked_at=self.ts,
             text=text, citations=citations or [], status=status, error=error,
         )
 
@@ -101,6 +103,14 @@ class OutboundEvent(_Event):
     status: Status
     error: str | None = Field(default=None, description="status=error일 때 사유")
     ts: datetime = Field(default_factory=_utcnow)
+    asked_at: datetime | None = Field(default=None, description="질문 원본 시각(InboundEvent.ts). 지연 계산용, 선택")
+
+    @field_validator("asked_at")
+    @classmethod
+    def _asked_at_aware(cls, v: datetime | None) -> datetime | None:
+        if v is not None and (v.tzinfo is None or v.utcoffset() is None):
+            raise ValueError("asked_at must be timezone-aware")
+        return v
 
     @model_validator(mode="after")
     def _status_consistency(self) -> OutboundEvent:

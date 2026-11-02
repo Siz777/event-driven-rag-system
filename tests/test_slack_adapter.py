@@ -136,6 +136,27 @@ def test_consumer_posts_then_acks(monkeypatch):
     assert channel == "C1" and thread_ts == "1793232753.123456" and text.endswith("근거 티켓: INC-2026-0003")
 
 
+def test_consumer_latency_uses_asked_at_not_thread_root(caplog):
+    """스레드 root가 10분 전이어도 질문이 3초 전이면 지연은 ~3s (2주차 664.9s 문제)."""
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    root_ts = f"{(now - timedelta(minutes=10)).timestamp():.6f}"
+    out = OutboundEvent(in_reply_to="Ev1", channel="C1", reply_to=root_ts, text="답", status="answered",
+                        asked_at=now - timedelta(seconds=3))
+    with caplog.at_level("INFO", logger="adapters.slack_reply"):
+        _consume(Recorder(), out.to_json().encode())
+    note = [r.message for r in caplog.records if "latency_from_question=" in r.message][0]
+    latency = float(note.split("latency_from_question=")[1].split("s")[0])
+    assert 2.5 <= latency < 10 and "(from reply_to)" not in note
+    # asked_at 없는 구버전 메시지는 reply_to 폴백 + 표시
+    caplog.clear()
+    with caplog.at_level("INFO", logger="adapters.slack_reply"):
+        _consume(Recorder(), OutboundEvent(in_reply_to="Ev1", channel="C1", reply_to=root_ts, text="답",
+                                          status="answered").to_json().encode())
+    note = [r.message for r in caplog.records if "latency_from_question=" in r.message][0]
+    assert "(from reply_to)" in note and float(note.split("latency_from_question=")[1].split("s")[0]) > 500
+
+
 def test_consumer_poison_acked_and_dropped():
     post = Recorder()
     m = _consume(post, b'{"nope": 1}')

@@ -39,6 +39,7 @@
 | status | `answered` \| `no_match` \| `error` \| `progress` | ✔ | answered: 근거 있는 답 / no_match: "유사 이력 없음" / error: 처리 실패 / progress: "검색 중…" 같은 중간 알림(Step 7 추가. 지금은 Socket 어댑터가 큐를 거치지 않고 직접 보낸다) |
 | error | str \| null | status=error면 ✔ | 실패 사유. status≠error면 있으면 안 됨 |
 | ts | datetime (tz-aware) | 기본 now(UTC) | 답 생성 시각 |
+| asked_at | datetime (tz-aware) \| null | 기본 null | 질문 원본 시각(`InboundEvent.ts` 복사, `inbound.reply()`가 채움). Slack 어댑터의 지연 로그용 — `reply_to`는 스레드 root ts라 스레드 안 질문은 틀린다(2주차 664.9s). 3주차 Step 0 추가, 기본 None이라 version 1 유지 |
 
 체크리스트 초안(event_id, in_reply_to, text, citations, status)에 `channel`·`reply_to`·`error`·`ts`를 더했다.
 이유: outbound 소비자(Slack 어댑터)가 상태 없이 "어디에 달지"를 알아야 재시작·중복 소비가 단순해진다. `error`는 status=error의 사유를 본문과 섞지 않기 위해.
@@ -74,7 +75,8 @@ OutboundEvent (`inbound.reply(...)`로 생성)
   ],
   "status": "answered",
   "error": null,
-  "ts": "2026-10-29T09:12:40+09:00"
+  "ts": "2026-10-29T09:12:40+09:00",
+  "asked_at": "2026-10-29T09:12:33+09:00"
 }
 ```
 
