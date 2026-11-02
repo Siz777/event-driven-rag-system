@@ -26,22 +26,29 @@ flowchart LR
 
 ## 결과
 
-| 검색 방식 | Recall@5 (합성 티켓) | Recall@5 (GitHub 이슈) |
-|---|---|---|
-| 벡터 only | overall 0.885 / paraphrase 1.0 / paraphrase_hard 0.60 / human 0.842 <!-- 2026-10-29, bge-m3, doc_text=full, eval 139 positive (exact·paraphrase·paraphrase_hard·multi_hop 30 + human 19); baseline 177c16c was 0.853 before paraphrase split --> | TBD |
-| BM25 only | overall 0.856 / paraphrase 1.0 / paraphrase_hard 0.40 / human 0.947 <!-- 2026-11-02, Kiwi+bm25s, 사용자 사전 80, doc_text=full --> | TBD |
-| 하이브리드 (RRF) | overall 0.885 / paraphrase 1.0 / paraphrase_hard 0.567 / human 0.895 (R@1 0.784, MRR 0.656) <!-- 2026-11-02, vector top-20 + bm25 top-20, RRF k=60, 1:1 --> | TBD |
-| 하이브리드 + 메타데이터 필터 | overall 0.885 / paraphrase 1.0 / paraphrase_hard 0.567 / human 0.895 (R@1 0.791, MRR 0.665 — 최고; 코드 단독 질의 5/5) <!-- 2026-11-02, 알람 코드→BM25 only, 설비 타입→payload filter, 170행 중 38에 적용 --> | TBD |
-| + negative grade (LangGraph) | R@5 0.885 유지(판정이 거른 정답 0) · **negative 31건 중 "이력 없음" 0.968** · positive 오판 0.014 · 지연 +4.7s <!-- 2026-11-02, cosine<0.50 게이트 + gpt-5-mini 티켓별 yes/no, yes≥2, scripts/eval_graph.py --> | TBD |
+합성 티켓 318건 · 평가셋 170행(positive 139 + negative 31) · k=5 · 같은 색인(bge-m3). 전 행은 `domains/manufacturing/eval/experiments.jsonl`, 요약은 docs/experiments/week3_summary.md.
+R@5는 벡터 only에서 이미 0.885라 하이브리드로 변하지 않는다 — 보는 지표는 **R@1·MRR**과 negative 처리율.
 
-<!-- 숫자는 domains/*/eval/experiments.jsonl 에서 가져온다. 측정 전엔 비워둔다. -->
+| 검색 방식 | human R@1 / MRR | 코드 단독 질의 (E-1101 · PECVD-03 E-1101 · E-5201) | overall R@1 / R@5 / MRR | negative "이력 없음" (31건) | GitHub 이슈 (docker/compose 중복 56쌍) R@5 |
+|---|---|---|---|---|---|
+| 벡터 only | 0.632 / 0.724 | 0/5 · 1/5 · 5/5 | 0.763 / 0.885 / 0.636 | — | TBD |
+| BM25 only (Kiwi, 사전 80) | 0.684 / 0.784 | 5/5 · 5/5 · 5/5 | 0.727 / 0.856 / 0.613 | — | TBD |
+| 하이브리드 (RRF k=60, 1:1) | 0.737 / 0.798 | 3/5 · 3/5 · 5/5 | 0.784 / 0.885 / 0.656 | — | TBD |
+| 하이브리드 + 메타데이터 필터 | **0.789 / 0.842** | **5/5 · 5/5 · 5/5** | **0.791 / 0.885 / 0.665** | — | |
+| + negative grade (LangGraph) | 검색 동일 | 검색 동일 | R@5 0.885 유지 (판정이 거른 정답 0) | **0.968** · positive 오판 0.014 · LLM 5.67회/질의 · 지연 16.3s(+4.7s) | |
+
+- paraphrase_hard(티켓 용어를 전혀 안 쓴 질의 30행)는 R@5 0.60 → 0.567로 하이브리드가 못 살린다. 임베딩 한계로 두고 숫자만 보고한다.
+- negative는 cosine 임계값만으로 분리되지 않는다(positive min 0.535 vs negative max 0.613 겹침). 임계값은 안전선(0.50), 판정은 LLM(티켓별 yes/no, 5건 중 2건 이상).
 
 ## 설계 결정
 
 <!-- 각 3줄 이내. docs/log/ 의 "결정" 칸에서 가져온다. -->
 - **RabbitMQ (Kafka 대신)** — 작업 큐 문제이고 DLQ·재시도가 내장. 처리량이 아니라 공정 분배와 유실 방지가 요구사항.
 - **원인 카탈로그 → 합성 티켓** — LLM 보조로 초안을 작성하고 학부 반도체 공정 지식으로 검토한 가상 카탈로그(검토 범위는 docs/catalog_review.md). root_cause는 사람이 고정, LLM은 표현만 생성. 역분류 검증(2심 + 사람 판정, docs/labeling_policy.md)으로 라벨 일관성 확보.
-- (3주차) RRF, Kiwi 사용자 사전, at-least-once + 멱등성 키
+- **RRF 1:1 고정 (가중치 튜닝 안 함)** — 평가셋 170행에 맞추면 과적합. 순위만 쓰므로 cosine·BM25 스케일 차이를 정규화할 필요가 없다. 코드 질의는 섞지 않고 라우팅(코드 → BM25만)으로 푼다.
+- **Kiwi 사용자 사전은 자동 검출** — 카탈로그 구절을 문맥째 분석해 기본 Kiwi가 잘못 쪼개는 단어(베인→베이+ㄴ, 리크→리+크, 미도달→미+도달)만 등록(80개). 전부 올리면 145개가 효과 없는 항목이었다.
+- **"모른다"는 LLM 판정 노드** — cosine 임계값은 negative 9할을 잡으려면 positive 1할을 버린다. 티켓별 yes/no + "5건 중 2건 이상" 규칙으로 negative 0.968·정답 유실 0. 배치 1회 판정은 전 지표 열세로 기각.
+- **at-least-once + 멱등성 키의 수명** — drain 타임아웃으로 버린 메시지는 브로커가 돌려주지만 멱등 키가 살아 있으면 다음 워커가 중복으로 버린다(유실 창 300s). 버리는 순간 키를 놓게 해 0으로.
 
 ## 실행 (Docker Compose)
 
@@ -96,10 +103,13 @@ docs/log/                ← 개발 일지 (결정·실험·막힌 것·한 줄)
 |---|---|---|---|
 | 1주차 검색 기준선 | 5일 | 4일 (10-26 ~ 10-29) | 합성 티켓 318건, 평가셋 170행, Recall@5 0.885 — docs/experiments/week1_summary.md |
 | 2주차 이벤트 경로 | 5일 | 1일 (10-29) | Slack → RabbitMQ → 워커 → Slack 왕복 18.6~21.8s, 컨테이너 6개, 테스트 84 — docs/week2_summary.md |
-| 3주차 하이브리드·평가 | 5일 | — (11-02 시작 예정) | docs/week3_checklist.md |
+| 3주차 하이브리드·평가 | 5일 | 1일 (11-02, Step 0~5) | BM25·RRF·메타데이터 라우팅·LangGraph grade, negative 0.968, 테스트 83 — docs/experiments/week3_summary.md |
 
 ## 한계와 다음 단계
 
-- 합성 데이터 — 실제 장애 텍스트의 노이즈는 노이즈 주입 실험과 GitHub 이슈 교차 검증으로 보완 (3주차)
+- paraphrase_hard(용어를 전혀 안 쓴 질의) R@5 0.567 — 어휘 매칭으로 구제되지 않는 임베딩 한계. 개선 대상에서 제외하고 숫자만 보고한다.
+- negative 31건 중 1건은 아직 답한다("센서·커넥터" 어휘 겹침). positive 2건은 잘못 "이력 없음"(검색 자체가 빗나간 1, 집계 답에 인용이 빠진 1).
+- 지연: 판정 추가로 질의당 +4.7s(평균 16.3s, p95 29.0s). 생성 LLM(10.9s)이 대부분, 판정은 병렬이라 더 못 줄인다.
+- 합성 데이터 — 실제 장애 텍스트의 노이즈는 노이즈 주입 실험과 GitHub 이슈 교차 검증으로 보완 (Step 6·7)
 - 알람 코드·설비 ID는 가상 체계
 - 멀티턴 대화 미지원 (thread_id는 스키마에 예약)

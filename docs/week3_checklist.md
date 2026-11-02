@@ -36,9 +36,9 @@ Step은 작업 단계이며 달력 날짜와 무관. 진행 날짜는 docs/log/ 
 - [x] 산출물: 혼동 행렬(negative 30/1, positive 137/2) + 판정 프롬프트 GRADE_SYSTEM(gpt-5 계열: 역할·규칙·출력만, reasoning 없음)
 
 ## Step 5 — 평가 재실행
-- [ ] 전 설정 재실행: vector / bm25 / hybrid / hybrid+filter / hybrid+filter+grade. 같은 평가셋(170행), 같은 k
-- [ ] 비교표: paraphrase_hard·human 열을 따로 — 1주차 결론("용어를 안 쓰면 무너진다")이 하이브리드로 얼마나 바뀌는지
-- [ ] 산출물: docs/experiments/week3_summary.md + README 결과 표 최종
+- [x] 전 설정 재실행: vector / bm25 / hybrid / hybrid+filter / hybrid+filter+grade — 전부 11-02 같은 색인·평가셋·k=5 (재실행 불필요, 행 그대로)
+- [x] 비교표: paraphrase_hard 0.6 → 0.567(안 바뀜, 임베딩 한계로 확정), human R@1 0.632 → 0.789
+- [x] 산출물: docs/experiments/week3_summary.md + README 결과 표 최종(human·코드 질의 먼저, R@1·MRR 주인공)
 
 ## Step 6 — GitHub 이슈 교차 검증
 - [ ] 공개 저장소 이슈 200~300건(한 프로젝트, 라벨 있는 것) → 같은 스키마로 변환 → 색인 → 질의 30개(제목 바꿔 쓰기)
