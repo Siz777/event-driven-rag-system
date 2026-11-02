@@ -5,3 +5,4 @@ __pycache__/
 .venv/
 domains/*/data/*.jsonl
 domains/*/eval/failures_*.md
+domains/*/artifacts/
