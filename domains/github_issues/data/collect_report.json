@@ -4,13 +4,13 @@
   "duplicate_issues": 156,
   "pairs_with_original": 59,
   "no_original_found": 97,
-  "corpus_from_bug_label": 1977,
-  "originals_added_to_corpus": 47,
-  "corpus_total": 2024,
+  "corpus_from_bug_label": 2569,
+  "originals_added_to_corpus": 31,
+  "corpus_total": 2600,
   "eval_rows": 56,
   "dropped": {
     "bot": 0,
-    "template_only": 17,
-    "is_query": 6
+    "template_only": 28,
+    "is_query": 10
   }
 }

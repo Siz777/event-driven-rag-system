@@ -41,9 +41,9 @@ Step은 작업 단계이며 달력 날짜와 무관. 진행 날짜는 docs/log/ 
 - [x] 산출물: docs/experiments/week3_summary.md + README 결과 표 최종(human·코드 질의 먼저, R@1·MRR 주인공)
 
 ## Step 6 — GitHub 이슈 교차 검증
-- [ ] 공개 저장소 이슈 200~300건(한 프로젝트, 라벨 있는 것) → 같은 스키마로 변환 → 색인 → 질의 30개(제목 바꿔 쓰기)
-- [ ] 합성 티켓 vs 실제 이슈에서 vector/hybrid 차이가 같은 방향인지 확인. README "Recall@5 (GitHub 이슈)" 열 채움
-- [ ] 산출물: 변환 스크립트 + 행 2개
+- [x] docker/compose kind/bug 2600건 → domains/github_issues/ (catalog 없음) → 색인 → 질의 = 중복 이슈 56쌍(시간 필터 뒤 46)
+- [x] R@5 방향 동일(hybrid 0.696 ≥ vector 0.63 > bm25 0.543), R@1은 반대(vector 최고). CI 겹침(n=46). README 열 채움
+- [x] 산출물: scripts/collect_github_issues.py + scripts/eval_github.py + 행 3개(domains/github_issues/eval/experiments.jsonl)
 
 ## Step 7 — 노이즈 주입 실험
 - [ ] 티켓 본문에 오타·줄임말·구어체 주입(비율 10/30%) → 재색인 → 평가. 벡터 vs BM25 중 어느 쪽이 먼저 무너지는지

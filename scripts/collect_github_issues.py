@@ -1,6 +1,6 @@
 """GitHub 이슈 교차 검증용 수집 (3주차 Step 6). gh CLI 인증을 쓴다(`gh auth status`).
 
-python -m scripts.collect_github_issues --repo docker/compose --bug-label kind/bug --corpus 2000
+python -m scripts.collect_github_issues --repo docker/compose --bug-label kind/bug --corpus 0   # 0 = bug 이슈 전부
 
 산출물 (domains/github_issues/)
 - data/tickets.jsonl : 코퍼스. {ticket_id: "GH-<n>", number, title, body(정제), created_at, labels, url}
@@ -11,7 +11,7 @@ python -m scripts.collect_github_issues --repo docker/compose --bug-label kind/b
 규칙
 - 중복 이슈 = label:duplicate 또는 state_reason=duplicate. 원본은 (1) 코멘트의 "duplicate of #N / dup of #N / duplicates #N",
   (2) 없으면 본문의 같은 패턴. 원본 번호가 중복 이슈보다 작아야(먼저 생성) 한다. 여러 개면 첫 번째.
-- 코퍼스 = bug 라벨 이슈 최신순 N건(PR 제외, 봇 제외). 중복 쌍의 원본이 코퍼스에 없으면 원본을 코퍼스에 추가한다(bug 라벨이
+- 코퍼스 = bug 라벨 이슈 최신순 N건(0이면 전부. 처음 2000건으로 했더니 2020년 이후뿐이라 2014~2017년 중복 쌍 46개가 후보 없이 평가됐다 — 질의 시대와 코퍼스 시대가 겹쳐야 한다). PR 제외, 봇 제외. 중복 쌍의 원본이 코퍼스에 없으면 원본을 코퍼스에 추가한다(bug 라벨이
   없어도 — 쌍을 살리기 위해, 추가 건수는 report에). 중복 이슈 자체는 코퍼스에서 뺀다(질의이므로).
 - 누수 차단: 질의·본문에서 "#숫자", 이슈 URL, "duplicate/dup" 단어를 지운다. 템플릿 헤딩(### …)·HTML 주석 제거.
   정제 후 본문 100자 미만이면 템플릿만 남은 이슈로 보고 제외.
@@ -92,7 +92,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", default="docker/compose")
     ap.add_argument("--bug-label", default="kind/bug")
-    ap.add_argument("--corpus", type=int, default=2000)
+    ap.add_argument("--corpus", type=int, default=0, help="bug 이슈 최신순 N건, 0이면 전부")
     args = ap.parse_args()
     report: dict = {"repo": args.repo, "bug_label": args.bug_label}
 
@@ -123,7 +123,9 @@ def main() -> None:
 
     issues = gh(f"repos/{args.repo}/issues", "state=all", f"labels={args.bug_label}", "per_page=100",
                 "sort=created", "direction=desc", paginate=True)
-    issues = [x for x in issues if "pull_request" not in x][: args.corpus]
+    issues = [x for x in issues if "pull_request" not in x]
+    if args.corpus > 0:
+        issues = issues[: args.corpus]
     corpus = {}
     dropped = {"bot": 0, "template_only": 0, "is_query": 0}
     dup_numbers = {d["number"] for d, _ in pairs}

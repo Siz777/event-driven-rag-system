@@ -51,9 +51,16 @@ def main() -> None:
     ap.add_argument("--methods", default="vector,bm25,hybrid")
     ap.add_argument("--k", type=int, default=5)
     ap.add_argument("--boot", type=int, default=2000)
+    ap.add_argument("--min-earlier", type=int, default=200,
+                    help="질의 이슈보다 먼저 만들어진 코퍼스 문서가 이보다 적은 질의는 제외(코퍼스가 최신 2000건이라 옛 질의는 후보가 없다)")
     args = ap.parse_args()
     rows = load_jsonl(config.EVAL_DIR / "eval.jsonl")
     created = {t["ticket_id"]: t["created_at"] for t in load_jsonl(config.DATA_DIR / "tickets.jsonl")}
+    dates = sorted(created.values())
+    import bisect
+    before = len(rows)
+    rows = [r for r in rows if bisect.bisect_left(dates, r["created_at"]) >= args.min_earlier]
+    print(f"queries: {before} → {len(rows)} (earlier-docs ≥ {args.min_earlier})")
     reps = [run(m, args.k, args.boot, rows, created) for m in args.methods.split(",")]
     print(f"| method | n | R@1 [95% CI] | R@{args.k} [95% CI] | MRR [95% CI] | 실패 |")
     print("|---|---|---|---|---|---|")
