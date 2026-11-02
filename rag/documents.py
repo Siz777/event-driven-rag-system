@@ -8,7 +8,11 @@ from . import config
 
 
 def load_catalog() -> dict:
-    with open(config.DOMAIN_DIR / "catalog.yaml", encoding="utf-8") as f:
+    """카탈로그가 없는 도메인(github_issues)은 빈 카탈로그 — 사용자 사전 없음, 코드 토큰만."""
+    path = config.DOMAIN_DIR / "catalog.yaml"
+    if not path.exists():
+        return {"equipment_types": {}, "causes": []}
+    with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
@@ -38,6 +42,8 @@ def doc_text(t: dict, mode: str | None = None) -> str:
     mode(기본 config.DOC_TEXT_MODE): full = 설비+증상+조치 기록+조치 결과 / symptom_only = 증상만
     (조치 기록에 부품명이 들어가 검색을 쉽게 만드는지 보는 실험용)."""
     mode = mode or config.DOC_TEXT_MODE
+    if "title" in t and "body" in t:                     # github_issues 도메인: 제목 + 본문
+        return f"제목: {t['title']}\n본문: {t['body'][:1500]}"
     if mode == "symptom_only":
         return f"증상: {t['symptom']}"
     if mode != "full":

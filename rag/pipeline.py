@@ -15,14 +15,15 @@ from __future__ import annotations
 from events import InboundEvent, OutboundEvent
 
 from . import config
-from .graph import MIN_COSINE, NO_MATCH, SYSTEM, ChatFn, GradeFn, SearchFn, build_context, default_chat, default_grade  # noqa: F401
-from .graph import default_search
+from .graph import GRADE_MODE, MIN_COSINE, NO_MATCH, SYSTEM, ChatFn, GradeBatchFn, GradeFn, SearchFn  # noqa: F401
+from .graph import build_context, default_chat, default_grade, default_grade_batch, default_search  # noqa: F401
 from .graph import run as _run
 
 MIN_SCORE = MIN_COSINE
 
 
 def answer(inbound: InboundEvent, *, search: SearchFn = default_search, chat: ChatFn = default_chat,
-           grade: GradeFn = default_grade, k: int = config.TOP_K, min_score: float = MIN_SCORE,
-           trace: dict | None = None) -> OutboundEvent:
-    return _run(inbound, k=k, trace=trace, search=search, chat=chat, grade=grade, min_cosine=min_score)
+           grade: GradeFn = default_grade, grade_batch: GradeBatchFn = default_grade_batch, grade_mode: str = GRADE_MODE,
+           k: int = config.TOP_K, min_score: float = MIN_SCORE, trace: dict | None = None) -> OutboundEvent:
+    return _run(inbound, k=k, trace=trace, search=search, chat=chat, grade=grade, grade_batch=grade_batch,
+                grade_mode=grade_mode, min_cosine=min_score)

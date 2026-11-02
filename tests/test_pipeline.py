@@ -142,3 +142,25 @@ def test_build_context_format():
     ctx = build_context(HITS[:1])
     assert ctx.startswith("[INC-2026-0012] (유사도 0.71)\n설비: PECVD")
     assert build_context([Hit("INC-2026-0001", 3.2, HITS[0].payload)]).startswith("[INC-2026-0001]\n")   # BM25 단독: 유사도 생략
+
+
+def test_batch_grade_mode_one_call_and_min_yes():
+    calls = []
+
+    def batch(q, hits):
+        calls.append([h.ticket_id for h in hits])
+        return [h.ticket_id in {"INC-2026-0012", "INC-2026-0100"} for h in hits]
+
+    def boom(q, h):
+        raise AssertionError("per-doc grade must not be called in batch mode")
+
+    trace = {}
+    out = answer(INB, search=lambda q, k: HITS, chat=lambda u, s: "[INC-2026-0012]", grade=boom, grade_batch=batch,
+                 grade_mode="batch", trace=trace)
+    assert out.status == "answered" and calls == [[h.ticket_id for h in HITS]]
+    assert trace["kept"] == ["INC-2026-0012", "INC-2026-0100"] and trace["llm_calls"] == 2   # 판정 1 + 생성 1
+    out = answer(INB, search=lambda q, k: HITS, chat=lambda u, s: "x", grade_batch=lambda q, hs: [True, False, False],
+                 grade_mode="batch")
+    assert out.status == "no_match"
+    with pytest.raises(ValueError):
+        answer(INB, search=lambda q, k: HITS, chat=lambda u, s: "x", grade_mode="weird")

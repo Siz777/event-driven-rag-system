@@ -24,6 +24,7 @@ from rag.graph import default_search
 from rag.pipeline import answer
 
 OUT = config.EVAL_DIR / "graph_results.jsonl"
+MODE = "per_doc"
 _SEARCH_LOCK = threading.Lock()   # bge-m3(MPS)·Qdrant local은 스레드 동시 호출에 안전하지 않다 — 검색만 직렬화, LLM 호출은 병렬
 
 
@@ -37,7 +38,7 @@ def run_one(row: dict) -> dict:
     trace: dict = {}
     t0 = time.monotonic()
     try:
-        out = answer(inb, trace=trace, search=locked_search)
+        out = answer(inb, trace=trace, search=locked_search, grade_mode=MODE)
         err = None
     except Exception as e:                      # 평가는 계속 — 실패는 따로 센다
         out, err = None, f"{type(e).__name__}: {e}"[:200]
@@ -95,8 +96,11 @@ def main() -> None:
     ap.add_argument("--out", default=str(OUT))
     ap.add_argument("--summary", action="store_true", help="기존 결과만 집계")
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--mode", choices=["per_doc", "batch"], default="per_doc", help="GRADE_MODE")
     args = ap.parse_args()
-    out = Path(args.out)
+    global MODE
+    MODE = args.mode
+    out = Path(args.out if args.mode == "per_doc" or args.out != str(OUT) else OUT.with_name("graph_results_batch.jsonl"))
     done = {r["query"]: r for r in load_jsonl(out)} if out.exists() else {}
     rows = load_jsonl(config.EVAL_DIR / "eval.jsonl")
     todo = [r for r in rows if r["query"] not in done or done[r["query"]]["status"] == "error"]
@@ -117,7 +121,7 @@ def main() -> None:
     s = summarize(results)
     print(json.dumps(s, ensure_ascii=False, indent=1))
     with open(config.EVAL_DIR / "experiments.jsonl", "a", encoding="utf-8") as f:
-        f.write(json.dumps({"method": "graph(hybrid+filter+grade)", "k": config.TOP_K, "doc_text_mode": config.DOC_TEXT_MODE,
+        f.write(json.dumps({"method": f"graph(hybrid+filter+grade:{MODE})", "k": config.TOP_K, "doc_text_mode": config.DOC_TEXT_MODE,
                             "n": len(results), "at": time.strftime("%Y-%m-%dT%H:%M"), "graph": s,
                             "embed_model": config.EMBED_MODEL, "collection": config.COLLECTION,
                             "llm_model": config.LLM_MODEL, "grade_model": config.LLM_MODEL_SMALL}, ensure_ascii=False) + "\n")

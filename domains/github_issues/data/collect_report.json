@@ -1,0 +1,16 @@
+{
+  "repo": "docker/compose",
+  "bug_label": "kind/bug",
+  "duplicate_issues": 156,
+  "pairs_with_original": 59,
+  "no_original_found": 97,
+  "corpus_from_bug_label": 1977,
+  "originals_added_to_corpus": 47,
+  "corpus_total": 2024,
+  "eval_rows": 56,
+  "dropped": {
+    "bot": 0,
+    "template_only": 17,
+    "is_query": 6
+  }
+}

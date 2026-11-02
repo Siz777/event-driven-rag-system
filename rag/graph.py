@@ -31,6 +31,7 @@ from .retrieve import Hit
 
 MIN_COSINE = float(os.getenv("GRADE_MIN_COSINE", "0.50"))
 MIN_YES = int(os.getenv("GRADE_MIN_YES", "2"))
+GRADE_MODE = os.getenv("GRADE_MODE", "per_doc")      # per_doc: 티켓별 호출(병렬) / batch: 티켓 k건을 한 호출로 판정
 LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "90"))
 GRADE_TIMEOUT = float(os.getenv("GRADE_TIMEOUT", "30"))
 NO_MATCH = "유사 이력 없음"
@@ -77,9 +78,17 @@ GRADE_SYSTEM = """<role>
 JSON만: {"relevant": "yes" 또는 "no"}
 </output>"""
 
+GRADE_BATCH_SYSTEM = GRADE_SYSTEM.replace("[티켓]은 검색된 과거 장애 1건이다.", "[티켓 목록]은 검색된 과거 장애 여러 건이며 각각 [INC-…] ID가 붙어 있다.") \
+    .replace("""<output>
+JSON만: {"relevant": "yes" 또는 "no"}
+</output>""", """<output>
+티켓마다 독립적으로 판단한다. JSON만: {"relevant": ["INC-…", …]} — yes인 티켓 ID 목록(없으면 빈 목록).
+</output>""")
+
 SearchFn = Callable[[str, int], list[Hit]]
 ChatFn = Callable[[str, str], str]
 GradeFn = Callable[[str, Hit], bool]
+GradeBatchFn = Callable[[str, list[Hit]], list[bool]]
 
 
 class State(TypedDict, total=False):
@@ -119,6 +128,19 @@ def default_grade(question: str, hit: Hit) -> bool:
         return "yes" in raw.lower() and "no" not in raw.lower()
 
 
+def default_grade_batch(question: str, hits: list[Hit]) -> list[bool]:
+    """k건을 한 번에 판정. 출력은 yes 티켓 ID 목록. 파싱 실패 시 본문에서 ID를 정규식으로 줍는다."""
+    from .llm import chat, parse_json
+    body = "\n\n".join(f"[{h.ticket_id}]\n{h.payload['_text']}\n최종 원인: {h.payload['root_cause']}" for h in hits)
+    user = f"[질문]\n{question}\n\n[티켓 목록]\n{body}"
+    raw = chat(user, GRADE_BATCH_SYSTEM, model=config.LLM_MODEL_SMALL, temperature=0.0, timeout=GRADE_TIMEOUT, max_attempts=2)
+    try:
+        yes = {str(x) for x in parse_json(raw).get("relevant", [])}
+    except Exception:
+        yes = set(_CITE.findall(raw))
+    return [h.ticket_id in yes for h in hits]
+
+
 def _sim(h: Hit) -> str:
     return f" (유사도 {h.cosine:.2f})" if h.cosine is not None else ""
 
@@ -140,7 +162,10 @@ def no_answer_text(k: int, hits: list[Hit]) -> str:
 
 # ---- 그래프 ----
 def build_graph(*, search: SearchFn = default_search, chat: ChatFn = default_chat, grade: GradeFn = default_grade,
+                grade_batch: GradeBatchFn = default_grade_batch, grade_mode: str = GRADE_MODE,
                 min_cosine: float = MIN_COSINE, min_yes: int = MIN_YES, parallel: int = 5):
+    if grade_mode not in ("per_doc", "batch"):
+        raise ValueError(f"unknown GRADE_MODE: {grade_mode}")
     def retrieve(st: State) -> dict:
         t0 = time.monotonic()
         hits = search(st["question"], st["k"])
@@ -160,13 +185,18 @@ def build_graph(*, search: SearchFn = default_search, chat: ChatFn = default_cha
         if st["vector_top1"] is not None and st["vector_top1"] < min_cosine:
             return {"gate": "cosine", "graded": [False] * len(hits), "kept": [],
                     "timings": {**st["timings"], "grade": time.monotonic() - t0}}
-        with ThreadPoolExecutor(max_workers=max(1, min(parallel, len(hits)))) as ex:
-            graded = list(ex.map(lambda h: bool(grade(st["question"], h)), hits))
+        if grade_mode == "batch":
+            graded = [bool(x) for x in grade_batch(st["question"], hits)]
+            calls = 1
+        else:
+            with ThreadPoolExecutor(max_workers=max(1, min(parallel, len(hits)))) as ex:
+                graded = list(ex.map(lambda h: bool(grade(st["question"], h)), hits))
+            calls = len(hits)
         kept = [h for h, ok in zip(hits, graded) if ok]
         if len(kept) < min(min_yes, len(hits)):          # 검색 결과가 min_yes보다 적으면 전부 yes일 때만 통과
             kept = []
         return {"gate": "llm" if not kept else "pass", "graded": graded, "kept": kept,
-                "llm_calls": st["llm_calls"] + len(hits), "timings": {**st["timings"], "grade": time.monotonic() - t0}}
+                "llm_calls": st["llm_calls"] + calls, "timings": {**st["timings"], "grade": time.monotonic() - t0}}
 
     def route(st: State) -> str:
         return "generate" if st["kept"] else "no_answer"
