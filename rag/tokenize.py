@@ -3,63 +3,110 @@
 규칙
 - 코드 토큰을 정규식으로 먼저 뽑아 그대로 보존: `E-1101`, `INC-2026-0002` ([A-Z]+-\\d+(-\\d+)*), `PECVD-03`·`CVD07` ([A-Z]{2,}-?\\d+).
   Kiwi는 하이픈에서 쪼개므로(E / - / 1101) 형태소 결과에서 이 조각들은 버리고 코드 원형만 남긴다.
-- Kiwi 토큰은 NNG(일반명사)·NNP(고유명사)·SL(외국어)·SN(숫자) 태그만 유지. 조사·어미·동사·기호 제거.
+  경계는 `\\b`가 아니라 영숫자 lookaround — `\\b`는 한글을 \\w로 보기 때문에 "PECVD-03에서"에서 코드가 안 잡힌다.
+- Kiwi 토큰은 NNG(일반명사)·NNP(고유명사)·SL(외국어)만 유지. 조사·어미·동사·기호 제거.
+  단독 SN(숫자: 25, 8, 10 같은 측정값)은 버린다 — 코드 안의 숫자는 정규식 토큰에 이미 들어 있다.
 - 모두 소문자화(doc·query 같은 함수를 지나므로 일관됨). Kiwi 분석은 원문 대소문자로 한다(O-ring 사용자 사전 매칭).
-- 사용자 사전: catalog.yaml에서 자동 추출(설비 유형 이름·vocab 항목·subsystem·root_cause 핵심 명사) → NNP.
-  "베인"이 동사(베이+ㄴ)로, "O-ring"이 O/-/ring으로 쪼개지는 것을 막는다. 띄어쓰기 없는 단어만 등록(BM25는 단일 토큰이 유리).
+- 사용자 사전(NNP)은 catalog.yaml에서 자동 검출한다(`user_words`):
+  (a) 설비 유형 이름·vocab·subsystem·root_cause·typical_symptoms·canonical_resolution을 구절 단위로 쪼개고, 각 원문 단어를
+      기본 Kiwi로 분석해 조사·어미를 뗀 어간이 2개 이상 형태소로 쪼개지거나 동사·형용사(V*)로 분석되는 것을 통째로 등록
+      (펌프다운 → 펌프+다운, 베인 → 베이/VV+ㄴ, 리크 → 리+크/VA, 드라이펌프 → 드라이+펌프).
+  (b) 부정 접두어 미·불·비·무 + 명사(미도달, 불균일, 비균일도)는 별도 규칙으로 통째 등록 — Kiwi는 접두어를 XPN으로 떼어내
+      "도달"만 남겨 "BP 도달 정상"과 구분이 안 된다.
+  (c) 하이픈 포함 단어(O-ring)와 수동 추가(EXTRA_WORDS: 튠 — 카탈로그에는 "튜닝"만 있어 자동 검출이 못 잡는다).
 """
 from __future__ import annotations
 
 import argparse
+import json
 import re
 from functools import lru_cache
 
 from .documents import load_catalog
 
-KEEP_TAGS = {"NNG", "NNP", "SL", "SN"}
+KEEP_TAGS = {"NNG", "NNP", "SL"}
 # \b는 한글도 \w로 보므로 "PECVD-03에서"에서 경계가 생기지 않는다 → 영숫자 기준 lookaround로 경계를 잡는다
 _B0, _B1 = r"(?<![A-Za-z0-9])", r"(?![A-Za-z0-9])"
 CODE_RES = [re.compile(_B0 + r"[A-Z]+-\d+(?:-\d+)*" + _B1),      # E-1101, INC-2026-0002
             re.compile(_B0 + r"[A-Z]{2,}-?\d+" + _B1)]            # PECVD-03, CVD-07, CVD07
-_SPLIT = re.compile(r"[()\[\],/·※:;]+")
-_PARTICLE = re.compile(r"(으로|로|의|에서|에|과|와)$")
-_STOP = {"인한", "및", "따른", "때문", "또는", "의한", "관련", "없음", "등"}
+_SPLIT = re.compile(r"[()\[\],/·※:;.+→—–]+")
 _HAS_KO = re.compile(r"[가-힣]")
+_NEG_PREFIX = ("미", "불", "비", "무")
+# 어간 뒤에 붙는 문법 형태소: 조사(J*), 어미(E*), 서술격 조사(VCP), 용언 파생 접미사(XSV/XSA), 보조 용언(VX), 기호(S*)
+_TRAILING = re.compile(r"^(J|E|VCP|XSV|XSA|VX|S)")
+# 자동 검출이 잡지만 사전에 넣으면 해로운 문법어·일반어
+_STOP = {"인한", "의한", "따른", "때문", "또는", "및", "등", "후", "시", "중", "내", "약", "경", "거칠"}   # 거칠: 형용사 어간 조각
+EXTRA_WORDS = ["튠"]
+_PHRASE_FIELDS = ("root_cause", "typical_symptoms", "canonical_resolution", "subsystem")
 
 
-def _words_from_phrase(phrase: str, strip_particles: bool) -> list[str]:
+@lru_cache(maxsize=1)
+def _base_kiwi():
+    from kiwipiepy import Kiwi
+    return Kiwi()
+
+
+def _phrases(cat: dict) -> list[str]:
     out = []
-    for piece in _SPLIT.split(phrase):
-        for w in piece.split():
-            w = w.strip()
-            if strip_particles:
-                w2 = _PARTICLE.sub("", w)
-                w = w2 if len(w2) >= 2 else w
-            if len(w) < 2 or w in _STOP:
-                continue
-            if _HAS_KO.search(w) or "-" in w:            # 순수 영문 단어는 SL로 어차피 보존
-                out.append(w)
+    for et in cat["equipment_types"].values():
+        out.append(et.get("name", ""))
+        out += [v for v in et.get("vocab", []) if not v.startswith("※")]
+    for c in cat["causes"]:
+        for f in _PHRASE_FIELDS:
+            v = c.get(f, "")
+            out += v if isinstance(v, list) else [v]
     return out
 
 
-def user_words(catalog: dict | None = None) -> list[str]:
-    """카탈로그에서 NNP로 등록할 단어 목록(중복 제거, 등장 순서 유지)."""
+def _word_groups(piece: str) -> list[tuple[str, list]]:
+    """구절을 통째로 분석(문맥 반영: "베인 마모"의 베인은 단독 분석과 다르게 쪼개진다)한 뒤 원문 공백 단어별로 형태소를 묶고,
+    뒤에 붙은 조사·어미를 뗀 어간 표면형과 어간 형태소 목록을 돌려준다."""
+    spans = [(m.start(), m.end()) for m in re.finditer(r"\S+", piece)]
+    toks = list(_base_kiwi().tokenize(piece))
+    out = []
+    for ws, we in spans:
+        g = [t for t in toks if ws <= t.start < we]
+        while g and _TRAILING.match(g[-1].tag):
+            g.pop()
+        if not g:
+            continue
+        end = min(g[-1].start + g[-1].len, we)
+        out.append((piece[g[0].start:end], g))
+    return out
+
+
+def detect_user_words(catalog: dict | None = None) -> dict[str, list[str]]:
+    """{단어: [검출 이유, …]}. 이유: split(2개 이상으로 쪼개짐) / verb(동사·형용사로 분석) / neg_prefix / hyphen / extra."""
     cat = catalog or load_catalog()
-    seen: dict[str, None] = {}
-    for et in cat["equipment_types"].values():
-        for w in _words_from_phrase(et.get("name", ""), False):
-            seen.setdefault(w)
-        for v in et.get("vocab", []):
-            if v.startswith("※"):
-                continue
-            for w in _words_from_phrase(v, False):
-                seen.setdefault(w)
-    for c in cat["causes"]:
-        for w in _words_from_phrase(c.get("subsystem", ""), False):
-            seen.setdefault(w)
-        for w in _words_from_phrase(c.get("root_cause", ""), True):
-            seen.setdefault(w)
-    return list(seen)
+    found: dict[str, list[str]] = {}
+
+    def add(w: str, why: str) -> None:
+        if w and w not in _STOP and (_HAS_KO.search(w) or "-" in w):
+            found.setdefault(w, [])
+            if why not in found[w]:
+                found[w].append(why)
+
+    for phrase in _phrases(cat):
+        for piece in _SPLIT.split(phrase):
+            for word in piece.split():
+                if "-" in word and _HAS_KO.search(word) is None:
+                    add(word, "hyphen")                          # O-ring
+            for stem, toks in _word_groups(piece):
+                if len(stem) < 2 or not _HAS_KO.search(stem):
+                    continue
+                if stem.startswith(_NEG_PREFIX) and len(stem) >= 3 and toks[0].tag == "XPN":
+                    add(stem, "neg_prefix")
+                elif len(toks) >= 2:
+                    add(stem, "split")
+                elif toks[0].tag.startswith("V"):
+                    add(stem, "verb")
+    for w in EXTRA_WORDS:
+        add(w, "extra")
+    return found
+
+
+def user_words(catalog: dict | None = None) -> list[str]:
+    return list(detect_user_words(catalog))
 
 
 @lru_cache(maxsize=1)
@@ -97,13 +144,18 @@ def explain(text: str) -> dict:
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dict", action="store_true", help="사용자 사전 단어 출력")
+    ap.add_argument("--dict", action="store_true", help="사용자 사전 단어 출력(단어\\t이유)")
+    ap.add_argument("--json", action="store_true", help="--dict를 JSON으로")
     ap.add_argument("text", nargs="*", help="토큰화 샘플")
     args = ap.parse_args()
     if args.dict:
-        ws = user_words()
-        print(f"# {len(ws)} words")
-        print("\n".join(ws))
+        d = detect_user_words()
+        if args.json:
+            print(json.dumps(d, ensure_ascii=False, indent=1))
+        else:
+            print(f"# {len(d)} words")
+            for w, why in d.items():
+                print(f"{w}\t{','.join(why)}")
     for s in args.text:
         e = explain(s)
         dropped = [f"{f}/{g}" for f, g, keep in e["morphs"] if not keep]

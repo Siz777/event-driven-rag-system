@@ -17,7 +17,7 @@ Step은 작업 단계이며 달력 날짜와 무관. 진행 날짜는 docs/log/ 
 - [x] `rag/tokenize.py` + `rag/bm25_index.py`(lexical.py 대신 둘로 나눔): Kiwi 토크나이저(명사·영문·숫자·코드 `E-1301`/`INC-…` 보존) + bm25s 색인. 사용자 사전: 설비명·부품명·알람 코드(카탈로그에서 추출)
 - [x] `python -m rag.bm25_index` (별도 명령). 색인 파일은 `domains/<domain>/artifacts/bm25/` 로컬(gitignore)
 - [x] 평가: `rag.eval --method bm25`. 확인: 코드 단독 질의 0/5 → 5/5, human 0.842 → 0.947, paraphrase_hard 0.6 → 0.367 (일지 11-02)
-- [x] 산출물: BM25 단독 행 1개(experiments.jsonl) + 토크나이저 샘플 10개 기록 (사전 보강 판단 대기: 리크·미도달·SN)
+- [x] 산출물: BM25 단독 행 1개(experiments.jsonl) + 토크나이저 샘플 10개 기록 (사전 v2: 자동 검출 80개, SN 제거 — docs/experiments/kiwi_dictionary.md)
 
 ## Step 2 — 하이브리드 (RRF)
 - [ ] `rag/retrieve.py`: vector top-k·bm25 top-k → RRF(k=60) 병합 → top-5. 가중치는 1:1 고정(튜닝 금지 — 평가셋이 170행이라 과적합)
