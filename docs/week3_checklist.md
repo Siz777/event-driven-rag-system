@@ -10,7 +10,7 @@ Step은 작업 단계이며 달력 날짜와 무관. 진행 날짜는 docs/log/ 
 ## Step 0 — 워밍업: 질문 ts → OutboundEvent
 - [x] `InboundEvent.ts`를 `OutboundEvent.asked_at`(tz-aware, 선택)으로 복사. `inbound.reply()`가 채움. 계약 version은 그대로(필드 추가 + 기본 None은 호환)
 - [x] `adapters/slack_reply.py`의 latency_from_question을 asked_at 기준으로(없으면 reply_to 폴백). 스레드 안 질문도 정확
-- [x] 테스트: contracts 왕복 1, reply 지연 로그 1. 2주차 미실험 2개 중 drain 타임아웃 초과만(requeue 통과, 300s 안 재시작은 멱등 가드가 버림 — 일지 11-02). retry 3단 155s 전 구간은 미실험
+- [x] 테스트: contracts 왕복 1, reply 지연 로그 1. 2주차 미실험 2개 중 drain 타임아웃 초과만(requeue 통과, 300s 안 재시작은 멱등 가드가 버림 → drain 타임아웃 시 키 release로 수정, 통합 테스트 test_k — 일지 11-02). retry 3단 155s 전 구간은 미실험
 - [x] 산출물: 커밋 1개, 일지 1줄
 
 ## Step 1 — Kiwi + BM25

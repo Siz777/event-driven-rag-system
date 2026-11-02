@@ -275,3 +275,39 @@ def test_j_fresh_processing_key_is_duplicate():
         publish(EV)
         assert wait_for(lambda: w.duplicates == 1)
     assert w.processed == 0 and wait_depth(topology.RESULTS, 0) == 0
+
+
+@needs_redis
+def test_k_drain_timeout_releases_key_so_requeued_copy_is_reprocessed(caplog):
+    """drain 타임아웃으로 버린 메시지: 브로커 requeue + 멱등 키 release → 재시작 워커가 300s 안에도 재처리한다."""
+    purge_all()
+    r = redis_client(); r.delete(f"idem:{EV.event_id}")
+    started = threading.Event()
+
+    def slow(inb):
+        started.set()
+        time.sleep(4)
+        return inb.reply("느린 답", status="answered")
+
+    rw = RunningWorker(slow, redis_url=REDIS_URL, drain_timeout=1.0)
+    with caplog.at_level("INFO", logger="worker"):
+        with rw as w:
+            publish(EV)
+            assert started.wait(10)
+            assert (r.get(f"idem:{EV.event_id}") or "").startswith("processing:")
+            w.request_stop()
+            rw.t.join(30)
+            assert not rw.t.is_alive()
+    assert w.processed == 0
+    assert "drain timeout: 1 message(s) left unacked" in caplog.text
+    assert r.get(f"idem:{EV.event_id}") is None                       # 키 release
+    assert wait_depth(topology.TASKS, 1) == 1 and wait_depth(topology.RESULTS, 0) == 0   # requeue, 결과 없음
+    # 늦게 끝난 파이프라인 결과는 publish되지 않는다(루프 종료 시 cancel되거나 _abandoned로 버림) — RESULTS 0이 그 증거
+
+    caplog.clear()
+    with caplog.at_level("INFO", logger="worker"):
+        with RunningWorker(lambda inb: inb.reply("답", status="answered"), redis_url=REDIS_URL) as w2:
+            assert wait_for(lambda: w2.processed == 1)
+    assert w2.duplicates == 0 and "duplicate, ack only" not in caplog.text
+    assert wait_depth(topology.RESULTS, 1) == 1 and wait_depth(topology.TASKS, 0) == 0
+    assert r.get(f"idem:{EV.event_id}") == "done"

@@ -11,6 +11,8 @@
   이미 있으면 "duplicate, ack only" — 파이프라인·ai_results publish 없이 ack. 성공하면 값을 done으로(TTL 유지).
   실패(재시도·dlq로 보냄)면 키 삭제 — 재시도 메시지는 같은 event_id라 키가 남아 있으면 영원히 중복 취급된다.
   처리 중 죽으면 processing 값이 남는다 → 중복 판정 때 processing이 STALE_PROCESSING_SEC보다 오래됐으면 새로 처리.
+  drain 타임아웃으로 처리 중 메시지를 버리고 종료할 때는 그 event_id의 키를 release한다 — 브로커가 requeue한 사본을
+  다음 워커가 300초 안에 받아도 중복으로 버리지 않게(3주차 Step 0 실험에서 발견한 유실 창).
   Redis 연결 실패면 WARNING 찍고 가드 없이 처리 — 가드 때문에 서비스가 멈추지 않게.
 """
 from __future__ import annotations
@@ -109,6 +111,8 @@ class Worker:
         self._stop = asyncio.Event()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._inflight: set[asyncio.Task] = set()
+        self._inflight_ids: dict[asyncio.Task, str] = {}   # 처리 중 태스크 → event_id (drain 타임아웃 때 키 release용)
+        self._abandoned: set[str] = set()                   # drain 타임아웃으로 버린 event_id — 늦게 끝나도 결과를 내지 않는다
         self.processed = 0
         self.failed = 0
         self.duplicates = 0
@@ -161,7 +165,12 @@ class Worker:
             log.info("draining %d in-flight (timeout %.0fs)…", len(self._inflight), self.drain_timeout)
             done, pending = await asyncio.wait(set(self._inflight), timeout=self.drain_timeout)
             if pending:
-                log.warning("drain timeout: %d message(s) left unacked — broker will requeue on disconnect", len(pending))
+                ids = [self._inflight_ids[t] for t in pending if t in self._inflight_ids]
+                self._abandoned.update(ids)
+                for eid in ids:
+                    await self.guard.release(eid)
+                log.warning("drain timeout: %d message(s) left unacked — idempotency key released for %s; "
+                            "broker will requeue on disconnect", len(pending), ids)
             else:
                 log.info("draining done")
         await conn.close()
@@ -176,6 +185,7 @@ class Worker:
             await self._handle(msg)
         finally:
             self._inflight.discard(task)
+            self._inflight_ids.pop(task, None)
 
     async def _handle(self, msg: AbstractIncomingMessage) -> None:
         headers = dict(msg.headers or {})
@@ -196,10 +206,16 @@ class Worker:
             await msg.ack()
             return
 
+        task = asyncio.current_task()
+        if task is not None:
+            self._inflight_ids[task] = inbound.event_id
         log.info("processing %s (retry %d) text=%r", inbound.event_id, retry_count, inbound.text[:60])
         t0 = time.monotonic()
         try:
             out = await asyncio.to_thread(self.pipeline, inbound)
+            if inbound.event_id in self._abandoned:
+                log.info("abandoned %s finished after drain timeout — result dropped, broker requeued the task", inbound.event_id)
+                return
             await self._topo.events.publish(
                 Message(body=out.to_json().encode(), content_type="application/json", content_encoding="utf-8",
                         delivery_mode=DeliveryMode.PERSISTENT, message_id=out.event_id, correlation_id=inbound.event_id,
@@ -211,6 +227,9 @@ class Worker:
             log.info("done %s → %s status=%s citations=%d (%.1fs)", inbound.event_id, topology.RESULTS,
                      out.status, len(out.citations), time.monotonic() - t0)
         except Exception as e:
+            if inbound.event_id in self._abandoned:        # 연결이 이미 닫힌 뒤 끝난 경우: 키는 release됐고 브로커가 requeue
+                log.info("abandoned %s failed after drain timeout (%s) — ignored", inbound.event_id, type(e).__name__)
+                return
             self.failed += 1
             await self.guard.release(inbound.event_id)     # 재시도 메시지(같은 event_id)가 중복으로 안 걸리게
             nxt = retry_count + 1
