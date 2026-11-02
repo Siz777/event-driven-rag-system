@@ -2,7 +2,7 @@
 
 슬랙에서 "이 장애 전에도 있었어?"라고 물으면, 과거 장애 이력을 검색해 근거 티켓과 함께 답하는 이벤트 기반 RAG 시스템.
 
-<!-- TODO(3주차): 데모 GIF — 슬랙 질문 → "유사 사례 2건 발견 (INC-0342, INC-1187)" 답변, 10초 이내 -->
+<!-- 데모 GIF 자리: docs/demo.md 절차로 촬영 → ![demo](docs/demo.gif) + "질문 → 검색 중… → 근거 티켓 답변, NN초" -->
 
 Python · FastAPI · RabbitMQ · LangGraph · Qdrant · Kiwi/BM25 · Docker Compose
 
@@ -17,10 +17,12 @@ flowchart LR
     F -->|publish| Q[(RabbitMQ)]
     Q -->|consume| W[Worker · LangGraph]
   end
-  subgraph Retrieval
-    W --> E[Embedding] --> V[(Qdrant)]
-    W --> B[BM25 · Kiwi]
-    V & B -->|RRF| L[LLM] --> R[Slack reply]
+  subgraph Retrieval["Retrieval · LangGraph (retrieve → grade → generate | no_answer)"]
+    W --> P[query parse<br/>코드·설비 필터] --> E[Embedding] --> V[(Qdrant)]
+    P --> B[BM25 · Kiwi 사전]
+    V & B -->|RRF| G{grade<br/>cosine ≥ 0.50 · LLM yes/no ≥ 2}
+    G -->|pass| L[LLM 생성 + 인용 검증] --> R[Slack reply]
+    G -->|no_answer| N[유사 이력 없음 + 참고 1건] --> R
   end
 ```
 
@@ -50,6 +52,26 @@ R@5는 벡터 only에서 이미 0.885라 하이브리드로 변하지 않는다 
 - **Kiwi 사용자 사전은 자동 검출** — 카탈로그 구절을 문맥째 분석해 기본 Kiwi가 잘못 쪼개는 단어(베인→베이+ㄴ, 리크→리+크, 미도달→미+도달)만 등록(80개). 전부 올리면 145개가 효과 없는 항목이었다.
 - **"모른다"는 LLM 판정 노드** — cosine 임계값은 negative 9할을 잡으려면 positive 1할을 버린다. 티켓별 yes/no + "5건 중 2건 이상" 규칙으로 negative 0.968·정답 유실 0. 배치 1회 판정은 전 지표 열세로 기각.
 - **at-least-once + 멱등성 키의 수명** — drain 타임아웃으로 버린 메시지는 브로커가 돌려주지만 멱등 키가 살아 있으면 다음 워커가 중복으로 버린다(유실 창 300s). 버리는 순간 키를 놓게 해 0으로.
+
+## 기각된 실험
+
+| 실험 | 결과 | 왜 기각 |
+|---|---|---|
+| symptom_only 색인 (증상만, 조치 기록 제외) | overall R@5 0.853 → 0.872, 사람 질의 0.842 → 0.789 | 오른 건 LLM 질의가 출처 티켓 증상을 바꿔 쓴 착시. 사람 질의가 떨어진다 (1주차) |
+| Kiwi 사전 v1 (카탈로그 단어 전부 188개) | v2(잘못 쪼개지는 단어만 80개)와 R@5 0.842 vs 0.856 | 145개는 Kiwi가 이미 한 토큰으로 보는 단어 — 효과 없는 항목. 자동 검출로 교체 |
+| grade 배치 1회 판정 (5건 한 호출) | negative 0.871 · positive 오판 0.072 · 정답 6건 거름 · 20.8s | 호출 수만 1/3, 정확도·지연 전부 열세. 목록 안 상대 비교로 yes가 흔들린다 |
+| RRF 가중치 튜닝 | 하지 않음 | 평가셋 170행에 맞추면 과적합. 코드 질의는 가중치 대신 라우팅으로 |
+
+## 신뢰성 (실험으로 확인한 것)
+
+| 상황 | 결과 | 어디에 |
+|---|---|---|
+| 브로커 재시작 (메시지 10건 적재 후 `restart rabbitmq`) | 유실 0 (durable 큐 + persistent 메시지) | docs/log/2026-10-29 |
+| 워커 종료 중 LLM 호출 (`docker compose stop worker`) | 처리 중 1건을 끝내고 나감(drain 120s), 답 도착, ai_tasks 0 | docs/log/2026-10-29 |
+| 처리 실패 3회 | 5s → 25s → 125s 재시도 큐 → DLQ(원문·마지막 오류 보존) | tests/test_worker.py |
+| 같은 event_id 2회 (Slack 재전송) | 1회만 처리 (Redis SET NX, 24h). Redis 장애면 가드 없이 처리 | tests/test_worker.py |
+| **drain 타임아웃 초과** (`WORKER_DRAIN_TIMEOUT=5`) | requeue는 되지만 멱등 키 때문에 300s 동안 중복으로 버려졌다 → 버릴 때 키 release로 유실 창 0 | docs/log/2026-11-02, test_k |
+| shell form CMD (PID 1 = sh) | SIGTERM이 python에 안 가 처리 중 답이 SIGKILL과 함께 사라짐 → exec form + tini | docs/week2_summary.md |
 
 ## 실행 (Docker Compose)
 
