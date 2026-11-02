@@ -9,6 +9,7 @@ qdrant-client>=1.10
 # 3주차 하이브리드 검색용 (지금 설치해도 무방)
 bm25s>=0.2
 kiwipiepy>=0.18
+PyStemmer>=2.2   # 영문 도메인 BM25 어간(github_issues)
 langgraph>=1.0   # 3주차 Step 4: retrieve → grade → generate|no_answer
 
 # 2주차: 이벤트 경로

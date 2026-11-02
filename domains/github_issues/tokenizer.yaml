@@ -1,0 +1,5 @@
+# 도메인별 BM25 토크나이저 설정 (rag/tokenize.py가 읽는다). 없으면 ko(Kiwi + 카탈로그 사전).
+lang: en
+stem: english          # PyStemmer (Snowball)
+stopwords: english     # rag/tokenize.py의 내장 목록
+# 코드 토큰: snake_case 식별자(depends_on), 버전(v2.32.0 / 2.3.1), 하이픈 ID(docker-compose, ECONN-123) — 소문자 그대로 보존

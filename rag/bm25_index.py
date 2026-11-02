@@ -17,10 +17,12 @@ import bm25s
 
 from . import config
 from .documents import doc_text, load_jsonl, load_tickets, save_jsonl
-from .tokenize import tokenize, user_words
+from .tokenize import USE_CODES, USE_DICT, domain_config, tokenize, user_words
 
-VERSION = 1
-BM25_DIR = config.DOMAIN_DIR / "artifacts" / "bm25"
+VERSION = 2
+# 실험 스위치(BM25_DICT=0 / BM25_CODES=0)는 별도 디렉터리에 색인해 기본 색인을 덮지 않는다
+_SUFFIX = ("" if USE_DICT else "_nodict") + ("" if USE_CODES else "_nocode")
+BM25_DIR = config.DOMAIN_DIR / "artifacts" / f"bm25{_SUFFIX}"
 
 
 def build(tickets: list[dict] | None = None, out_dir: Path = BM25_DIR) -> dict:
@@ -33,7 +35,8 @@ def build(tickets: list[dict] | None = None, out_dir: Path = BM25_DIR) -> dict:
     retriever.save(str(out_dir / "index"))
     save_jsonl(out_dir / "docs.jsonl", [{**t, "_text": texts[i]} for i, t in enumerate(tickets)])
     manifest = {"version": VERSION, "bm25s": bm25s.__version__, "n_docs": len(tickets),
-                "n_user_words": len(user_words()), "doc_text_mode": config.DOC_TEXT_MODE,
+                "tokenizer": domain_config(), "use_dict": USE_DICT, "use_codes": USE_CODES,
+                "n_user_words": len(user_words()) if USE_DICT else 0, "doc_text_mode": config.DOC_TEXT_MODE,
                 "avg_tokens": round(sum(map(len, corpus)) / max(len(corpus), 1), 1),
                 "vocab_size": len({tok for c in corpus for tok in c}),
                 "at": datetime.now().isoformat(timespec="minutes")}

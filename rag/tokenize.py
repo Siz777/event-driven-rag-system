@@ -1,4 +1,8 @@
-"""BM25용 한국어 토크나이저 (Kiwi 형태소 분석 + 코드 토큰 보존 + 카탈로그 사용자 사전).
+"""BM25용 토크나이저. 도메인 설정(domains/<domain>/tokenizer.yaml)으로 교체한다 — 없으면 한국어(Kiwi).
+
+ko (기본): Kiwi 형태소 분석 + 코드 토큰 보존 + 카탈로그 사용자 사전.
+en (github_issues): 소문자 + 코드 토큰(snake_case·버전·하이픈 ID) 선추출 + 영문 불용어 제거 + PyStemmer(Snowball) 어간.
+실험 스위치(환경변수): BM25_DICT=0 사용자 사전 끔, BM25_CODES=0 코드 정규식 끔 — Step 7 노이즈 실험에서 기여 분리용.
 
 규칙
 - 코드 토큰을 정규식으로 먼저 뽑아 그대로 보존: `E-1101`, `INC-2026-0002` ([A-Z]+-\\d+(-\\d+)*), `PECVD-03`·`CVD07` ([A-Z]{2,}-?\\d+).
@@ -19,10 +23,25 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from functools import lru_cache
 
+from . import config
 from .documents import load_catalog
+
+USE_DICT = os.getenv("BM25_DICT", "1") != "0"
+USE_CODES = os.getenv("BM25_CODES", "1") != "0"
+
+
+@lru_cache(maxsize=1)
+def domain_config() -> dict:
+    path = config.DOMAIN_DIR / "tokenizer.yaml"
+    if path.exists():
+        import yaml
+        return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return {"lang": "ko"}
+
 
 KEEP_TAGS = {"NNG", "NNP", "SL"}
 # \b는 한글도 \w로 보므로 "PECVD-03에서"에서 경계가 생기지 않는다 → 영숫자 기준 lookaround로 경계를 잡는다
@@ -113,23 +132,53 @@ def user_words(catalog: dict | None = None) -> list[str]:
 def _kiwi():
     from kiwipiepy import Kiwi
     k = Kiwi()
-    for w in user_words():
-        k.add_user_word(w, "NNP", 10.0)
+    if USE_DICT:
+        for w in user_words():
+            k.add_user_word(w, "NNP", 10.0)
     return k
 
 
-def _codes(text: str) -> tuple[list[str], str]:
+def _codes(text: str, patterns: list[re.Pattern] | None = None) -> tuple[list[str], str]:
     """코드 토큰 목록과 코드를 공백으로 치환한 나머지 텍스트."""
+    if not USE_CODES:
+        return [], text
     found = []
     rest = text
-    for rx in CODE_RES:
+    for rx in (patterns or CODE_RES):
         for m in rx.finditer(rest):
             found.append(m.group(0))
         rest = rx.sub(" ", rest)
     return found, rest
 
 
+# ---- en ----
+EN_CODE_RES = [re.compile(r"(?<![A-Za-z0-9_])[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+(?![A-Za-z0-9_])"),   # depends_on, COMPOSE_PROJECT_NAME
+               re.compile(r"(?<![A-Za-z0-9.])v?\d+\.\d+(?:\.\d+)*(?![A-Za-z0-9.])"),                  # v2.32.0, 1.29
+               re.compile(r"(?<![A-Za-z0-9])[A-Za-z]+(?:-[A-Za-z0-9]+)+(?![A-Za-z0-9])")]                  # docker-compose, no-recreate
+EN_STOP = set("""a an the and or but if then else of to in on at by for from with without into onto as is are was were be been
+being am do does did doing have has had having it its this that these those there here i me my we our you your he she they them
+their his her not no nor so than too very can could should would will shall may might must just also only same such which who whom
+whose what when where why how all any both each few more most other some own over under up down out off again further once because
+while until about above below between through during before after against""".split())
+
+
+@lru_cache(maxsize=1)
+def _stemmer():
+    import Stemmer
+    return Stemmer.Stemmer(domain_config().get("stem", "english"))
+
+
+def tokenize_en(text: str) -> list[str]:
+    codes, rest = _codes(text, EN_CODE_RES)
+    words = [w for w in re.findall(r"[a-z0-9]+", rest.lower()) if len(w) >= 2 and w not in EN_STOP]
+    if domain_config().get("stem"):
+        words = _stemmer().stemWords(words)
+    return [c.lower() for c in codes] + words
+
+
 def tokenize(text: str) -> list[str]:
+    if domain_config().get("lang") == "en":
+        return tokenize_en(text)
     codes, rest = _codes(text)
     toks = [t.form for t in _kiwi().tokenize(rest) if t.tag in KEEP_TAGS]
     return [c.lower() for c in codes] + [t.lower() for t in toks]
@@ -137,6 +186,9 @@ def tokenize(text: str) -> list[str]:
 
 def explain(text: str) -> dict:
     """샘플 점검용: 코드 토큰, 형태소(형태/태그/유지 여부), 최종 토큰."""
+    if domain_config().get("lang") == "en":
+        codes, _ = _codes(text, EN_CODE_RES)
+        return {"text": text, "codes": codes, "morphs": [], "tokens": tokenize(text)}
     codes, rest = _codes(text)
     morphs = [(t.form, t.tag, t.tag in KEEP_TAGS) for t in _kiwi().tokenize(rest)]
     return {"text": text, "codes": codes, "morphs": morphs, "tokens": tokenize(text)}
