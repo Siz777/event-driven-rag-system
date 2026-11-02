@@ -25,9 +25,9 @@ Step은 작업 단계이며 달력 날짜와 무관. 진행 날짜는 docs/log/ 
 - [x] 산출물: README 결과 표 3행 채움
 
 ## Step 3 — 설비 메타데이터 필터
-- [ ] 질문에서 설비명·설비 ID 추출(사전 매칭, LLM 아님) → Qdrant payload filter + BM25 사후 필터. 추출 실패면 필터 없음
-- [ ] 평가: 1주차 실패 분석의 "설비 혼동 2건"이 잡히는지. 필터 오탐(엉뚱한 설비로 좁힘)이 더 많으면 끈다
-- [ ] 산출물: 필터 on/off 행 2개
+- [x] `rag/query_parse.py`: 알람 코드(정규화)·설비 ID·설비 타입 키워드 추출(사전 매칭) → 코드면 alarm_code 필터 + BM25 순위만, 타입이면 Qdrant payload filter + BM25 사후 필터 + RRF. 추출 실패·미지 코드면 필터 없음
+- [x] 평가: 설비 혼동 2건은 설비명 없는 질의라 원리상 못 잡음. 타입 오탐 0/9, 코드 단독 5/5, R@1 0.791·MRR 0.665 → 켠다. 필터 적용 38/170(22.4%)
+- [x] 산출물: 필터 on/off 행 2개(hybrid / hybrid+filter, experiments.jsonl) + filter_hits 집계. negative는 필터로 분리 안 됨(positive도 같이 하락) — Step 4는 LLM 판정
 
 ## Step 4 — negative grade 노드 (LangGraph)
 - [ ] `rag/graph.py`: retrieve → grade → (answer | no_match). grade = 점수 임계값(보조) + LLM 판정("검색 결과가 질문과 같은 설비·증상인가", yes/no, 소형 모델). LangGraph StateGraph로 노드 3개

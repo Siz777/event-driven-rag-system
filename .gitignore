@@ -6,3 +6,4 @@ __pycache__/
 domains/*/data/*.jsonl
 domains/*/eval/failures_*.md
 domains/*/artifacts/
+domains/*/eval/filter_trace_*.jsonl

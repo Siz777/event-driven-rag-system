@@ -34,10 +34,16 @@ def run(method: str = "vector", k: int = 5, dump_failures: bool = True) -> dict:
     by_source: dict[str, list[dict]] = defaultdict(list)
     failures = []
     neg_top1 = []
+    filter_hits: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))   # applied → difficulty → n
+    traces = []
 
     for r in rows:
-        hits = search(r["query"], k=k, method=method)
+        trace: dict = {}
+        hits = search(r["query"], k=k, method=method, trace=trace)
         ranked = [h.ticket_id for h in hits]
+        if trace:
+            filter_hits[trace["applied"]][r["difficulty"]] += 1
+            traces.append({"query": r["query"], "difficulty": r["difficulty"], **trace, "top": ranked[:3]})
         if r["difficulty"] == "negative":
             neg_top1.append(hits[0].score if hits else 0.0)
             continue
@@ -69,6 +75,12 @@ def run(method: str = "vector", k: int = 5, dump_failures: bool = True) -> dict:
         # 3주차 negative 임계값 캘리브레이션에 쓰는 통계
         report["negative"] = {"n": len(neg_top1), "top1_score_mean": round(statistics.mean(neg_top1), 3),
                               "top1_score_max": round(max(neg_top1), 3)}
+
+    if traces:
+        report["filter_hits"] = {a: {**dict(d), "total": sum(d.values())} for a, d in sorted(filter_hits.items())}
+        with open(config.EVAL_DIR / f"filter_trace_{method}.jsonl", "w", encoding="utf-8") as f:
+            for t in traces:
+                f.write(json.dumps(t, ensure_ascii=False) + "\n")
 
     if dump_failures:
         out = config.EVAL_DIR / (f"failures_{method}.md" if config.DOC_TEXT_MODE == "full"

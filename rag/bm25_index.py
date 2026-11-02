@@ -50,6 +50,10 @@ def _load(out_dir: str = str(BM25_DIR)) -> tuple[bm25s.BM25, list[dict]]:
     return bm25s.BM25.load(str(d / "index")), load_jsonl(d / "docs.jsonl")
 
 
+def n_docs() -> int:
+    return len(_load()[1])
+
+
 def search(query: str, k: int = config.TOP_K) -> list[tuple[float, dict]]:
     """[(score, payload)] 점수 내림차순, 점수 0 제외."""
     retriever, docs = _load()
