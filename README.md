@@ -32,6 +32,7 @@ flowchart LR
 | BM25 only | overall 0.856 / paraphrase 1.0 / paraphrase_hard 0.40 / human 0.947 <!-- 2026-11-02, Kiwi+bm25s, 사용자 사전 80, doc_text=full --> | TBD |
 | 하이브리드 (RRF) | overall 0.885 / paraphrase 1.0 / paraphrase_hard 0.567 / human 0.895 (R@1 0.784, MRR 0.656) <!-- 2026-11-02, vector top-20 + bm25 top-20, RRF k=60, 1:1 --> | TBD |
 | 하이브리드 + 메타데이터 필터 | overall 0.885 / paraphrase 1.0 / paraphrase_hard 0.567 / human 0.895 (R@1 0.791, MRR 0.665 — 최고; 코드 단독 질의 5/5) <!-- 2026-11-02, 알람 코드→BM25 only, 설비 타입→payload filter, 170행 중 38에 적용 --> | TBD |
+| + negative grade (LangGraph) | R@5 0.885 유지(판정이 거른 정답 0) · **negative 31건 중 "이력 없음" 0.968** · positive 오판 0.014 · 지연 +4.7s <!-- 2026-11-02, cosine<0.50 게이트 + gpt-5-mini 티켓별 yes/no, yes≥2, scripts/eval_graph.py --> | TBD |
 
 <!-- 숫자는 domains/*/eval/experiments.jsonl 에서 가져온다. 측정 전엔 비워둔다. -->
 

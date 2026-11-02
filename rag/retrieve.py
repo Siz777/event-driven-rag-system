@@ -16,8 +16,9 @@ from .query_parse import QueryFilters, parse_query
 @dataclass
 class Hit:
     ticket_id: str
-    score: float
+    score: float            # method별 점수(vector cosine / BM25 / RRF)
     payload: dict
+    cosine: float | None = None   # 벡터 경로를 거친 문서의 cosine. BM25 단독 결과는 None. grade·인용 점수용
 
 
 def _qdrant_filter(alarm_codes: list[str] | None, equipment_types: list[str] | None) -> Filter | None:
@@ -34,7 +35,7 @@ def vector_search(query: str, k: int = config.TOP_K, *, alarm_codes: list[str] |
     qv = embed.embed([query], kind="query")[0].tolist()
     res = client().query_points(config.COLLECTION, query=qv, limit=k, with_payload=True,
                                 query_filter=_qdrant_filter(alarm_codes, equipment_types)).points
-    return [Hit(p.payload["ticket_id"], float(p.score), p.payload) for p in res]
+    return [Hit(p.payload["ticket_id"], float(p.score), p.payload, cosine=float(p.score)) for p in res]
 
 
 def _accept(p: dict, alarm_codes: list[str] | None, equipment_types: list[str] | None) -> bool:
@@ -61,16 +62,23 @@ def rrf(ranked_lists: list[list[Hit]], k: int = config.TOP_K, rrf_k: int = RRF_K
     """Reciprocal Rank Fusion. score = Σ 1/(rrf_k + rank). 동점이면 먼저 들어온 목록(벡터) 순서 유지."""
     scores: dict[str, float] = {}
     payloads: dict[str, dict] = {}
+    cosines: dict[str, float] = {}
     for hits in ranked_lists:
         for rank, h in enumerate(hits, 1):
             scores[h.ticket_id] = scores.get(h.ticket_id, 0.0) + 1.0 / (rrf_k + rank)
             payloads.setdefault(h.ticket_id, h.payload)
+            if h.cosine is not None:
+                cosines[h.ticket_id] = h.cosine
     top = sorted(scores.items(), key=lambda kv: -kv[1])[:k]
-    return [Hit(tid, sc, payloads[tid]) for tid, sc in top]
+    return [Hit(tid, sc, payloads[tid], cosine=cosines.get(tid)) for tid, sc in top]
 
 
-def hybrid_search(query: str, k: int = config.TOP_K, candidates: int = CANDIDATES) -> list[Hit]:
-    return rrf([vector_search(query, candidates), bm25_search(query, candidates)], k)
+def hybrid_search(query: str, k: int = config.TOP_K, candidates: int = CANDIDATES,
+                  equipment_types: list[str] | None = None, trace: dict | None = None) -> list[Hit]:
+    vec = vector_search(query, candidates, equipment_types=equipment_types)
+    if trace is not None:
+        trace["vector_top1"] = vec[0].cosine if vec else None
+    return rrf([vec, bm25_search(query, candidates, equipment_types=equipment_types)], k)
 
 
 def filtered_search(query: str, k: int = config.TOP_K, candidates: int = CANDIDATES,
@@ -90,15 +98,15 @@ def filtered_search(query: str, k: int = config.TOP_K, candidates: int = CANDIDA
             hits = bm25_search(query, k, alarm_codes=f.alarm_codes)
         applied = "code" if hits else "code_fallback"
     if not hits and f.type_filter:
-        hits = rrf([vector_search(query, candidates, equipment_types=f.type_filter),
-                    bm25_search(query, candidates, equipment_types=f.type_filter)], k)
+        hits = hybrid_search(query, k, candidates, equipment_types=f.type_filter, trace=trace)
         applied = "type" if applied == "none" else applied + "+type"
     if not hits:
-        hits = hybrid_search(query, k, candidates)
+        hits = hybrid_search(query, k, candidates, trace=trace)
         if applied != "none":
             applied += "+none"
     if trace is not None:
         trace.update({"filters": f.as_dict(), "applied": applied})
+        trace.setdefault("vector_top1", None)             # 코드 분기(BM25만)는 cosine 없음
     return hits
 
 

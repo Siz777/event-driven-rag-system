@@ -7,3 +7,4 @@ domains/*/data/*.jsonl
 domains/*/eval/failures_*.md
 domains/*/artifacts/
 domains/*/eval/filter_trace_*.jsonl
+domains/*/eval/graph_results.jsonl

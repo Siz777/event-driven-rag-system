@@ -30,10 +30,10 @@ Step은 작업 단계이며 달력 날짜와 무관. 진행 날짜는 docs/log/ 
 - [x] 산출물: 필터 on/off 행 2개(hybrid / hybrid+filter, experiments.jsonl) + filter_hits 집계. negative는 필터로 분리 안 됨(positive도 같이 하락) — Step 4는 LLM 판정
 
 ## Step 4 — negative grade 노드 (LangGraph)
-- [ ] `rag/graph.py`: retrieve → grade → (answer | no_match). grade = 점수 임계값(보조) + LLM 판정("검색 결과가 질문과 같은 설비·증상인가", yes/no, 소형 모델). LangGraph StateGraph로 노드 3개
-- [ ] `pipeline.answer`가 graph를 호출. 계약·워커 변경 없음
-- [ ] 평가: negative 31행에서 no_match 비율(목표 0.8 이상) vs positive에서 오탐 no_match(목표 0.05 이하). 1주차 수치: 임계값만으로는 못 가름(negative 0.547/0.625 vs positive 0.57~0.73)
-- [ ] 산출물: 혼동 행렬 1개 + LLM 판정 프롬프트(모델 등급별 원칙 적용)
+- [x] `rag/graph.py`: retrieve → grade → (generate | no_answer). grade = cosine<0.50(보조) + 티켓별 LLM yes/no(gpt-5-mini, 병렬, yes≥2). LangGraph StateGraph 노드 4개 + 생성 후검증(인용 0 → no_answer)
+- [x] `pipeline.answer`가 graph를 호출. 계약·워커 변경 없음(워커 warmup에 Kiwi·BM25 로드만 추가)
+- [x] 평가: negative no_match 0.968(30/31), positive 오탐 0.014(2/139), 정답 유실 0, 지연 +4.7s — scripts/eval_graph.py, 일지 11-02
+- [x] 산출물: 혼동 행렬(negative 30/1, positive 137/2) + 판정 프롬프트 GRADE_SYSTEM(gpt-5 계열: 역할·규칙·출력만, reasoning 없음)
 
 ## Step 5 — 평가 재실행
 - [ ] 전 설정 재실행: vector / bm25 / hybrid / hybrid+filter / hybrid+filter+grade. 같은 평가셋(170행), 같은 k

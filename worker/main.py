@@ -254,8 +254,11 @@ def _real_pipeline() -> tuple[PipelineFn, Callable[[], None]]:
     from rag.pipeline import answer
 
     def warmup() -> None:
+        from rag import bm25_index, tokenize
         embed.embed(["warmup"], kind="query")
         client()
+        tokenize.tokenize("워밍업 PECVD-01 E-1101")       # Kiwi 모델 + 사용자 사전 로드
+        bm25_index.n_docs()                                # BM25 색인 로드(없으면 FileNotFoundError → 워커가 뜨지 않는다)
 
     return answer, warmup
 
