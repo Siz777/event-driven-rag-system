@@ -30,7 +30,7 @@ flowchart LR
 
 ## 결과
 
-합성 티켓 318건 · 평가셋 170행(positive 139 + negative 31) · k=5 · 같은 색인(bge-m3). 전 행은 `domains/manufacturing/eval/experiments.jsonl`, 요약은 docs/experiments/week3_summary.md.
+합성 티켓 318건 · 평가셋 170행(positive 139 + negative 31) · k=5 · 같은 색인(bge-m3). 전 행은 `domains/manufacturing/eval/experiments.jsonl`, 요약은 docs/experiments/week3_summary.md. (11-03에 사람이 직접 쓴 질의 5행을 더해 175행으로 재평가 — overall 불변, 숫자는 docs/log/2026-11-02.md. 아래 표는 170행 기준.)
 R@5는 벡터 only에서 이미 0.885라 하이브리드로 변하지 않는다 — 보는 지표는 **R@1·MRR**과 negative 처리율.
 
 | 검색 방식 | human R@1 / MRR | 코드 단독 질의 (E-1101 · PECVD-03 E-1101 · E-5201) | overall R@1 / R@5 / MRR | negative "이력 없음" (31건) | GitHub 이슈 (docker/compose 중복 46쌍, 코퍼스 2600) R@5 [95% CI] |
@@ -82,6 +82,7 @@ R@5는 벡터 only에서 이미 0.885라 하이브리드로 변하지 않는다 
 
 ```bash
 cp .env.example .env                     # LLM_API_KEY, SLACK_BOT_TOKEN(xoxb-), SLACK_APP_TOKEN(xapp-) 입력. 웹훅만 쓰면 SLACK_SIGNING_SECRET (*_URL은 compose가 서비스명으로 덮어씀)
+pip install -r requirements.txt && python -m rag.bm25_index   # 최초 1회: BM25 색인(domains/*/artifacts/bm25, 호스트에서 생성 — 컨테이너는 domains/를 읽기 전용으로 마운트하고 워커 warmup이 이 색인을 요구한다)
 docker compose up --build -d             # 6개 healthy까지 1~2분 (worker는 bge-m3 로드 후 healthy)
 docker compose run --rm worker python -m rag.index   # 최초 1회: 티켓 318건을 qdrant에 적재
 docker compose ps                        # 전부 healthy 확인
@@ -104,6 +105,7 @@ cp .env.example .env            # LLM 키 입력. QDRANT_URL 비우면 ./.qdrant
 python -m scripts.generate_tickets --per-cause 8
 python -m scripts.validate_tickets
 python -m rag.index
+python -m rag.bm25_index         # BM25 색인 (Kiwi 사용자 사전은 catalog.yaml에서 자동 검출)
 python ask.py "펌프다운이 평소보다 오래 걸리는데 예전에 비슷한 일 있었어?"
 python -m scripts.build_evalset
 python -m rag.eval --method vector
@@ -117,9 +119,10 @@ python -m pytest                         # 유닛 + integration(브로커 없으
 ## 프로젝트 구조
 
 ```
-domains/<domain>/        ← 도메인별 교체 단위: catalog, prompts, data, eval
-rag/                     ← 도메인을 모르는 코어: embed, index, retrieve, eval
-scripts/                 ← 데이터 생성·검증·평가셋
+domains/<domain>/        ← 도메인별 교체 단위: catalog, prompts, data, eval, tokenizer.yaml, artifacts/bm25 (gitignore)
+rag/                     ← 도메인을 모르는 코어: embed, index, bm25_index, tokenize, query_parse, retrieve, graph, pipeline, eval
+worker/ adapters/ api/   ← 큐 소비자, Slack Socket Mode·답글, 웹훅
+scripts/                 ← 데이터 생성·검증·평가셋·노이즈·GitHub 이슈 수집·그래프 평가
 docs/log/                ← 개발 일지 (결정·실험·막힌 것·한 줄)
 ```
 
@@ -129,7 +132,7 @@ docs/log/                ← 개발 일지 (결정·실험·막힌 것·한 줄)
 |---|---|---|---|
 | 1주차 검색 기준선 | 5일 | 4일 (10-26 ~ 10-29) | 합성 티켓 318건, 평가셋 170행, Recall@5 0.885 — docs/experiments/week1_summary.md |
 | 2주차 이벤트 경로 | 5일 | 1일 (10-29) | Slack → RabbitMQ → 워커 → Slack 왕복 18.6~21.8s, 컨테이너 6개, 테스트 84 — docs/week2_summary.md |
-| 3주차 하이브리드·평가 | 5일 | 1일 (11-02, Step 0~5) | BM25·RRF·메타데이터 라우팅·LangGraph grade, negative 0.968, 테스트 83 — docs/experiments/week3_summary.md |
+| 3주차 하이브리드·평가 | 5일 | 2일 (11-02 ~ 11-03, Step 0~8) | BM25·RRF·메타데이터 라우팅·LangGraph grade(negative 0.968), GitHub 교차 검증, 노이즈 주입, 데모 GIF, 테스트 86 유닛 + 11 통합 — docs/experiments/week3_summary.md |
 
 ## 한계와 다음 단계
 
