@@ -50,13 +50,13 @@ Step은 작업 단계이며 달력 날짜와 무관. 진행 날짜는 docs/log/ 
 - [x] 산출물: noise_results.jsonl 행 35개(7세트 × 5설정) + 한 줄 결론(일지 11-02 Step 7)
 
 ## Step 8 — README 최종 · 데모 GIF
-- [ ] 데모 GIF: Cmd+Shift+5 선택 영역(Slack 창 스레드만), 질문은 미리 입력해 두고 Enter부터 답변까지 20초 내. `ffmpeg -i demo.mov -vf "fps=10,scale=800:-1" -loop 0 docs/demo.gif`
+- [x] 데모 GIF: Cmd+Shift+5 선택 영역(Slack 창 스레드만), 질문은 미리 입력해 두고 Enter부터 답변까지 20초 내. `ffmpeg -i demo.mov -vf "fps=10,scale=800:-1" -loop 0 docs/demo.gif`
 - [x] README: 아키텍처(parse → RRF → grade 분기), 결과 표 숫자 전부(experiments.jsonl 대조 완료), 설계 결정 4개, 기각된 실험·신뢰성 표, 한계 갱신
-- [ ] 산출물: GIF(docs/demo.md 절차로 촬영 예정) + README ✓ + 3주차 요약 ✓
+- [x] 산출물: GIF(docs/demo.gif 26초 · 질문→답변 19.4초) + README ✓ + 3주차 요약 ✓
 
 ## 주차 마무리
-- [ ] docs/experiments/week3_summary.md, 일지 결정 칸(RRF 가중치 고정 이유, grade를 LLM으로 한 이유, 필터 on/off)
-- [ ] 한 줄 후보: 하이브리드가 paraphrase_hard를 얼마나 살렸는지 한 숫자
+- [x] docs/experiments/week3_summary.md, 일지 결정 칸(RRF 가중치 고정 이유, grade를 LLM으로 한 이유, 필터 on/off)
+- [x] 한 줄 후보: 하이브리드가 paraphrase_hard를 얼마나 살렸는지 한 숫자
 
 ## 하지 않는 것
 - 멀티턴, 리랭커(cross-encoder), 파인튜닝, 평가셋 확장(170행 고정), 가중치 튜닝, Kafka
