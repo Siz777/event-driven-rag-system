@@ -5,6 +5,8 @@ python -m scripts.make_noise_eval  → domains/manufacturing/eval/eval_noise.jso
  (a) typo : 한글 음절 1~2곳의 자모 교체 — 모음 ㅐ↔ㅔ·ㅙ↔ㅚ·ㅒ↔ㅖ, 받침 ㄴ↔ㅁ·ㅇ→ㄴ·ㄹ→ㄴ (밸브→벨브, 펌프다운→펌프다움)
  (b) abbr : 약어·한영 혼용 치환표(긴 것 먼저, 전부 치환) — 챔버→CH, 펌프다운→pump down, 헬륨→He …
  (c) both : abbr 적용 후 남은 한글에 typo
+ (d) typo10 / typo30 / both30 : 비율형 — 한글 음절의 10% / 30%를 같은 규칙으로 교체(체크리스트의 "비율 10/30%"). 1~2곳 변형이
+     너무 약해 R@5가 안 움직였을 때 어디서 무너지는지 보기 위함.
 changed=False인 행(치환 대상 없음)은 깨끗한 질의 그대로 — 집계 때 changed만 세거나 전체를 세거나 둘 다 보고한다.
 """
 from __future__ import annotations
@@ -39,7 +41,8 @@ def compose(c: str, v: str, t: str) -> str:
     return chr(0xAC00 + CHO.index(c) * 588 + JUNG.index(v) * 28 + JONG.index(t))
 
 
-def typo(text: str, rng: random.Random) -> str:
+def typo(text: str, rng: random.Random, rate: float | None = None) -> str:
+    """rate=None이면 1~2곳, 아니면 교체 가능한 음절 중 비율만큼(최소 1곳)."""
     chars = list(text)
     cands = []
     for i, ch in enumerate(chars):
@@ -52,7 +55,7 @@ def typo(text: str, rng: random.Random) -> str:
             if "가" <= ch <= "힣" and decompose(ch)[2] != "\0":
                 c, v, _ = decompose(ch); chars[i] = compose(c, v, "\0"); return "".join(chars)
         return text
-    n = min(len(cands), rng.choice([1, 2]))
+    n = min(len(cands), rng.choice([1, 2])) if rate is None else max(1, round(len(cands) * rate))
     for i in rng.sample(cands, n):
         c, v, t = decompose(chars[i])
         if v in V_SWAP and (t == "\0" or t not in T_SWAP or rng.random() < 0.5):
@@ -76,13 +79,16 @@ def main() -> None:
         q = r["query"]
         variants = {"typo": typo(q, random.Random(1000 + i)), "abbr": abbr(q)}
         variants["both"] = typo(variants["abbr"], random.Random(2000 + i))
+        variants["typo10"] = typo(q, random.Random(3000 + i), rate=0.10)
+        variants["typo30"] = typo(q, random.Random(4000 + i), rate=0.30)
+        variants["both30"] = typo(variants["abbr"], random.Random(5000 + i), rate=0.30)
         for kind, nq in variants.items():
             out.append({**r, "query": nq, "clean_query": q, "noise": kind, "changed": nq != q})
     save_jsonl(config.EVAL_DIR / "eval_noise.jsonl", out)
-    stats = {k: sum(1 for o in out if o["noise"] == k and o["changed"]) for k in ("typo", "abbr", "both")}
+    stats = {k: sum(1 for o in out if o["noise"] == k and o["changed"]) for k in ("typo", "abbr", "both", "typo10", "typo30", "both30")}
     print(f"rows {len(rows)} × 3 = {len(out)}; changed: {stats}")
-    for o in out[:9]:
-        if o["changed"]:
+    for o in out[:12]:
+        if o["changed"] and o["noise"] in ("typo", "typo30", "both30"):
             print(f"[{o['noise']}] {o['clean_query'][:50]}\n   → {o['query'][:50]}")
 
 

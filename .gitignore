@@ -11,3 +11,4 @@ domains/*/eval/graph_results.jsonl
 domains/*/eval/graph_results_*.jsonl
 domains/*/eval/eval_noise.jsonl
 *.mov
+domains/*/eval/noise_results.jsonl

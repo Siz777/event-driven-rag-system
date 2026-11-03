@@ -44,7 +44,7 @@ def run_one(row: dict) -> dict:
         out, err = None, f"{type(e).__name__}: {e}"[:200]
     return {"query": row["query"], "difficulty": row["difficulty"], "neg_type": row.get("neg_type"),
             "source": row.get("source", "llm"), "relevant": row["relevant_ticket_ids"],
-            "source_ticket_id": row.get("source_ticket_id", ""),
+            "source_ticket_id": row.get("source_ticket_id", ""), "noise": row.get("noise"), "changed": row.get("changed"),
             "status": out.status if out else "error", "error": err,
             "citations": [c.ticket_id for c in out.citations] if out else [],
             "text": (out.text if out else "")[:300], **trace, "wall": time.monotonic() - t0}
@@ -97,12 +97,13 @@ def main() -> None:
     ap.add_argument("--summary", action="store_true", help="기존 결과만 집계")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--mode", choices=["per_doc", "batch"], default="per_doc", help="GRADE_MODE")
+    ap.add_argument("--eval-file", default="eval.jsonl", help="EVAL_DIR 안의 평가셋 파일(eval_noise.jsonl 등)")
     args = ap.parse_args()
     global MODE
     MODE = args.mode
     out = Path(args.out if args.mode == "per_doc" or args.out != str(OUT) else OUT.with_name("graph_results_batch.jsonl"))
     done = {r["query"]: r for r in load_jsonl(out)} if out.exists() else {}
-    rows = load_jsonl(config.EVAL_DIR / "eval.jsonl")
+    rows = load_jsonl(config.EVAL_DIR / args.eval_file)
     todo = [r for r in rows if r["query"] not in done or done[r["query"]]["status"] == "error"]
     if args.limit:
         todo = todo[:args.limit]
@@ -121,7 +122,7 @@ def main() -> None:
     s = summarize(results)
     print(json.dumps(s, ensure_ascii=False, indent=1))
     with open(config.EVAL_DIR / "experiments.jsonl", "a", encoding="utf-8") as f:
-        f.write(json.dumps({"method": f"graph(hybrid+filter+grade:{MODE})", "k": config.TOP_K, "doc_text_mode": config.DOC_TEXT_MODE,
+        f.write(json.dumps({"method": f"graph(hybrid+filter+grade:{MODE})", "eval_file": args.eval_file, "k": config.TOP_K, "doc_text_mode": config.DOC_TEXT_MODE,
                             "n": len(results), "at": time.strftime("%Y-%m-%dT%H:%M"), "graph": s,
                             "embed_model": config.EMBED_MODEL, "collection": config.COLLECTION,
                             "llm_model": config.LLM_MODEL, "grade_model": config.LLM_MODEL_SMALL}, ensure_ascii=False) + "\n")

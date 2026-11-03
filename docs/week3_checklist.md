@@ -46,13 +46,13 @@ Step은 작업 단계이며 달력 날짜와 무관. 진행 날짜는 docs/log/ 
 - [x] 산출물: scripts/collect_github_issues.py + scripts/eval_github.py + 행 3개(domains/github_issues/eval/experiments.jsonl)
 
 ## Step 7 — 노이즈 주입 실험
-- [ ] 티켓 본문에 오타·줄임말·구어체 주입(비율 10/30%) → 재색인 → 평가. 벡터 vs BM25 중 어느 쪽이 먼저 무너지는지
-- [ ] 산출물: 행 4개 + 한 줄 결론
+- [x] (질의 쪽에 주입 — 티켓 재색인 대신 79행 질의에 오타 1~2곳/10%/30%·약어·둘 다) vector / hybrid+filter / graph + 사전·코드 off. 벡터가 먼저(both30 0.924), 하이브리드 R@5 0.975 유지
+- [x] 산출물: noise_results.jsonl 행 35개(7세트 × 5설정) + 한 줄 결론(일지 11-02 Step 7)
 
 ## Step 8 — README 최종 · 데모 GIF
 - [ ] 데모 GIF: Cmd+Shift+5 선택 영역(Slack 창 스레드만), 질문은 미리 입력해 두고 Enter부터 답변까지 20초 내. `ffmpeg -i demo.mov -vf "fps=10,scale=800:-1" -loop 0 docs/demo.gif`
-- [ ] README: 아키텍처 그림 실제와 일치(LangGraph·BM25 들어감), 결과 표 전부 숫자, 설계 결정 3주차 3개 추가, 한계 갱신
-- [ ] 산출물: GIF + README + 3주차 요약
+- [x] README: 아키텍처(parse → RRF → grade 분기), 결과 표 숫자 전부(experiments.jsonl 대조 완료), 설계 결정 4개, 기각된 실험·신뢰성 표, 한계 갱신
+- [ ] 산출물: GIF(docs/demo.md 절차로 촬영 예정) + README ✓ + 3주차 요약 ✓
 
 ## 주차 마무리
 - [ ] docs/experiments/week3_summary.md, 일지 결정 칸(RRF 가중치 고정 이유, grade를 LLM으로 한 이유, 필터 on/off)
