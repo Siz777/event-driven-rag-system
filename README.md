@@ -6,6 +6,14 @@
 
 실시간 녹화 26초 · 질문→답변 19.4초(로그 기준). CMP-02 · E-5201 질문 → "검색 중…" → 근거 티켓 2건 답변(Slack 스레드 패널).
 
+<details>
+<summary>두 번째 데모 — 설비 되묻기 (51초, 펼치기)</summary>
+
+![demo: 설비 되묻기](docs/demo_clarify.gif)
+
+설비 되묻기: 설비명 없는 질문 → 후보 3개 제시 → 답변 후 재검색 (실시간 51초 · 되묻기까지 6.9초, 답변까지 25.6초 — 로그 기준). "챔버 진공이 계속 떨어지는데" → PECVD / PVD / ETCH 후보 → "PECVD-03" 답 → PECVD 근거 티켓 4건.
+</details>
+
 Python · FastAPI · RabbitMQ · LangGraph · Qdrant · Kiwi/BM25 · Docker Compose
 
 ## 아키텍처

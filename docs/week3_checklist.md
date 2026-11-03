@@ -57,7 +57,7 @@ Step은 작업 단계이며 달력 날짜와 무관. 진행 날짜는 docs/log/ 
 ## Step 9 — 설비 되묻기 (11-03 추가, 사용자 질의 124건 분석에서 도출)
 - [x] rag/clarify.py(조건·문구·답 해석) + graph clarify 노드(grade 뒤) + status=clarify + worker ClarifyStore(스레드당 1회, Redis 300s) + Slack 포맷
 - [x] 평가(scripts/eval_clarify.py): 발동 44/124, 오라클 답 후 R@5 0.75 → 0.831(상한 0.871), negative 발동 0/39, 미발동 실패 17건 그룹 R@5 0.529
-- [ ] 슬랙 수동 왕복 1회(되묻기 → 답 → 재검색) 로그 — 워커 왕복은 test_l로 검증, Slack 실기는 사용자(docs/demo.md 5절)
+- [x] 슬랙 수동 왕복 1회(되묻기 → 답 → 재검색): 되묻기 6.9s, 답 25.6s(slack 로그) — docs/demo_clarify.gif(51초, README 두 번째 GIF)
 - [x] README 결과 표 "되묻기 후" 줄 + 한계 절, 일지
 
 ## 주차 마무리
