@@ -7,6 +7,8 @@
 - Ollama는 필요할 때만. Step 4 이후 심판은 gpt-5-mini이므로 Ollama 모델이 로드돼 있으면(`ollama ps`) 내린다(`ollama stop <model>`). 7B 로드 시 약 5GB.
 - Docker Desktop 제한: 디스크 32GB, 메모리 6GB. 워커 이미지는 CPU torch 고정(2.26GB), GPU torch가 섞이면 빌드가 실패하도록 되어 있다 — 그 안전장치를 풀지 말 것.
 - 작업 시작 전 `docker compose ps`로 6개 healthy 확인, 작업 끝나면 `docker compose stop`.
+- 통합 테스트 시 worker뿐 아니라 **slack 컨테이너도** 내릴 것 — slack이 ai_results를 소비해 결과 검증을 가로챈다(2026-11-03 test_c).
+- 코드 변경 후 healthy는 **옛 이미지**일 수 있음 — `docker compose build worker slack` 먼저, 그 다음 `up -d`. healthy는 이미지 최신 여부를 말해 주지 않는다(2026-11-03 장애 중 worker가 2주차 이미지로 돌고 있었음).
 
 ## 평가·기록 규칙 (3주차 추가)
 - 결과 표는 human 줄과 코드 질의를 먼저, overall은 그 아래. 주인공 지표는 R@1·MRR(R@5는 벡터 only에서 이미 0.885, 하이브리드로 불변).
