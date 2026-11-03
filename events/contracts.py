@@ -13,6 +13,7 @@
 - reply_to는 Slack thread_ts(메시지 ts). 어댑터가 질문 메시지 ts를 넣으므로 답은 항상 질문 스레드에 달린다.
 - OutboundEvent는 channel/reply_to를 inbound에서 복사해 들고 다닌다.
   답을 보내는 쪽(Slack 어댑터)이 inbound를 다시 조회하지 않아도 되게 — 소비자는 상태가 없어야 재시작이 쉽다.
+- status=clarify(3주차 Step 9)는 값 추가만이라 version 1 그대로. 모르는 소비자는 Literal 검증에서 거부한다 — 어댑터 갱신이 먼저.
 - asked_at은 InboundEvent.ts 복사본(선택). reply_to는 스레드 root ts라 스레드 안 질문의 지연 계산에 못 쓴다.
   필드 추가 + 기본 None은 하위 호환이라 version은 1 그대로.
 """
@@ -26,7 +27,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 SCHEMA_VERSION = 1
 
-Status = Literal["answered", "no_match", "error", "progress"]   # progress: "검색 중…" 같은 중간 알림(어댑터가 직접 보냄)
+Status = Literal["answered", "no_match", "error", "progress", "clarify"]
+# progress: "검색 중…" 같은 중간 알림(어댑터가 직접 보냄) / clarify: 설비 되묻기(3주차 Step 9) — 본문이 질문, citations 비어 있음.
+# 사용자의 스레드 답글이 같은 reply_to로 들어오면 워커가 원 질의와 합쳐 재검색한다(worker.ClarifyStore).
 
 
 def _utcnow() -> datetime:

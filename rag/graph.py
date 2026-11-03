@@ -1,4 +1,4 @@
-"""LangGraph 답변 그래프 (3주차 Step 4): retrieve → grade → (generate | no_answer) → respond.
+"""LangGraph 답변 그래프 (3주차 Step 4): retrieve → grade → (clarify | generate | no_answer) → respond.
 
 grade 2단
  (a) cosine 보조: 벡터 top1 cosine < MIN_COSINE(0.50)이면 LLM 없이 no_answer. positive 최저 0.535(11-02 측정)보다 낮은 안전선이라
@@ -6,6 +6,10 @@ grade 2단
  (b) LLM 판정: 상위 k건 각각 "이 티켓이 질문과 같은 설비·증상·원인인가" yes/no (LLM_MODEL_SMALL, 스레드 병렬).
      yes가 MIN_YES(2)건 미만이면 no_answer. 1건만 yes인 경우는 11-02 평가에서 negative 4건(소음·커넥터·냄새처럼 느슨하게 겹치는 티켓
      하나)뿐이었고 positive는 0건 — 5건 중 1건만 yes면 근거가 아니라 우연으로 본다.
+clarify(Step 9, 11-03): grade를 통과한 티켓(kept)이 설비 2종 이상에 걸치고 질의에 설비·코드가 없으면 답 대신 설비를 묻는다
+  (rag/clarify.py). grade **뒤**에 두는 이유: 검색 결과만 보면 negative 39건 중 25건이 설비 혼재로 되묻기에 걸린다(11-03 측정) —
+  "이력 없음"을 되묻기가 가려서는 안 되므로 LLM 판정이 negative를 거른 뒤에만 묻는다. 비용: 되묻은 질의만 grade 2회.
+  되묻기 답은 원 질의에 "(설비: X)"를 붙여 다시 들어오므로(worker) 라우팅 필터가 걸리고 조건에서 빠진다 — 세션당 1회.
 generate 후검증: 답변에 검색 결과 티켓 인용이 0건이면 no_answer(근거 없는 답은 내보내지 않는다).
 no_answer 본문: "검색 상위 k건 중 판정된 티켓 없음" + 가장 가까운 티켓 1건 "참고(유사도 낮음)" + 신규 티켓 등록 안내.
   본문이 "유사 이력 없음"으로 시작하지 않는 이유: Slack 어댑터(format_reply)가 그 문구로 시작하는 본문을 통째로 버리고 자기 문구만 보낸다.
@@ -27,6 +31,7 @@ from langgraph.graph import END, START, StateGraph
 from events import Citation, InboundEvent, OutboundEvent
 
 from . import config
+from .clarify import ClarifyDecision, clarify_text, should_clarify
 from .retrieve import Hit
 
 MIN_COSINE = float(os.getenv("GRADE_MIN_COSINE", "0.50"))
@@ -34,6 +39,7 @@ MIN_YES = int(os.getenv("GRADE_MIN_YES", "2"))
 GRADE_MODE = os.getenv("GRADE_MODE", "per_doc")      # per_doc: 티켓별 호출(병렬) / batch: 티켓 k건을 한 호출로 판정
 LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "90"))
 GRADE_TIMEOUT = float(os.getenv("GRADE_TIMEOUT", "30"))
+CLARIFY = os.getenv("GRAPH_CLARIFY", "1") == "1"       # 설비 되묻기 on/off(평가 비교용)
 NO_MATCH = "유사 이력 없음"
 _CITE = re.compile(r"INC-\d{4}-\d{4}")   # 대괄호 안 묶음 인용([INC-a, INC-b])도 잡히게 ID 자체를 찾는다
 
@@ -100,6 +106,8 @@ class State(TypedDict, total=False):
     graded: list[bool]
     kept: list[Hit]
     gate: str                  # cosine / llm / pass / empty
+    clarify: bool              # 되묻기 허용 여부(세션 2회째는 False)
+    candidates: list[str]      # 되묻기 후보 설비(발동 시)
     text: str
     citations: list[Citation]
     status: str
@@ -163,7 +171,7 @@ def no_answer_text(k: int, hits: list[Hit]) -> str:
 # ---- 그래프 ----
 def build_graph(*, search: SearchFn = default_search, chat: ChatFn = default_chat, grade: GradeFn = default_grade,
                 grade_batch: GradeBatchFn = default_grade_batch, grade_mode: str = GRADE_MODE,
-                min_cosine: float = MIN_COSINE, min_yes: int = MIN_YES, parallel: int = 5):
+                min_cosine: float = MIN_COSINE, min_yes: int = MIN_YES, parallel: int = 5, clarify: bool = CLARIFY):
     if grade_mode not in ("per_doc", "batch"):
         raise ValueError(f"unknown GRADE_MODE: {grade_mode}")
     def retrieve(st: State) -> dict:
@@ -198,8 +206,20 @@ def build_graph(*, search: SearchFn = default_search, chat: ChatFn = default_cha
         return {"gate": "llm" if not kept else "pass", "graded": graded, "kept": kept,
                 "llm_calls": st["llm_calls"] + calls, "timings": {**st["timings"], "grade": time.monotonic() - t0}}
 
+    def _decision(st: State) -> ClarifyDecision | None:
+        if not clarify or not st.get("clarify", True) or not st["kept"]:
+            return None
+        return should_clarify(st["question"], st["kept"], min_cosine=min_cosine)
+
     def route(st: State) -> str:
-        return "generate" if st["kept"] else "no_answer"
+        if not st["kept"]:
+            return "no_answer"
+        return "clarify" if _decision(st) else "generate"
+
+    def clarify_node(st: State) -> dict:
+        d = _decision(st)
+        assert d is not None
+        return {"status": "clarify", "citations": [], "text": clarify_text(d), "candidates": d.types}
 
     def generate(st: State) -> dict:
         t0 = time.monotonic()
@@ -226,23 +246,27 @@ def build_graph(*, search: SearchFn = default_search, chat: ChatFn = default_cha
     g.add_node("grade", grade_node)
     g.add_node("generate", generate)
     g.add_node("no_answer", no_answer)
+    g.add_node("clarify", clarify_node)
     g.add_edge(START, "retrieve")
     g.add_edge("retrieve", "grade")
-    g.add_conditional_edges("grade", route, {"generate": "generate", "no_answer": "no_answer"})
+    g.add_conditional_edges("grade", route, {"generate": "generate", "no_answer": "no_answer", "clarify": "clarify"})
     g.add_edge("generate", END)
     g.add_edge("no_answer", END)
+    g.add_edge("clarify", END)
     return g.compile()
 
 
-def run(inbound: InboundEvent, *, k: int = config.TOP_K, trace: dict | None = None, **kw) -> OutboundEvent:
-    """pipeline.answer가 부른다. trace를 주면 state 계측(gate·graded·kept·llm_calls·timings)을 채운다."""
+def run(inbound: InboundEvent, *, k: int = config.TOP_K, trace: dict | None = None, allow_clarify: bool = True, **kw) -> OutboundEvent:
+    """pipeline.answer가 부른다. trace를 주면 state 계측(gate·graded·kept·llm_calls·timings·candidates)을 채운다.
+    allow_clarify=False는 되묻기 답이 해석되지 않았을 때 원 질의를 그대로 답하는 2회째 호출용(무한 왕복 금지)."""
     graph = build_graph(**kw)
     t0 = time.monotonic()
-    st = graph.invoke({"question": inbound.text, "k": k, "timings": {}})
+    st = graph.invoke({"question": inbound.text, "k": k, "timings": {}, "clarify": allow_clarify})
     if trace is not None:
         trace.update({"gate": st.get("gate"), "vector_top1": st.get("vector_top1"),
                       "hits": [h.ticket_id for h in st.get("hits", [])], "graded": st.get("graded", []),
                       "kept": [h.ticket_id for h in st.get("kept", [])], "llm_calls": st.get("llm_calls", 0),
+                      "candidates": st.get("candidates", []),
                       "timings": {**st.get("timings", {}), "total": time.monotonic() - t0}, "status": st["status"]})
     if not st.get("hits"):
         return inbound.reply(NO_MATCH, status="no_match")

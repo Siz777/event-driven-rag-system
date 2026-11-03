@@ -15,10 +15,15 @@
   drain 타임아웃으로 처리 중 메시지를 버리고 종료할 때는 그 event_id의 키를 release한다 — 브로커가 requeue한 사본을
   다음 워커가 300초 안에 받아도 중복으로 버리지 않게(3주차 Step 0 실험에서 발견한 유실 창).
   Redis 연결 실패면 WARNING 찍고 가드 없이 처리 — 가드 때문에 서비스가 멈추지 않게.
+- 설비 되묻기(3주차 Step 9): 파이프라인이 status=clarify를 내면 `clarify:{reply_to}` → {question, event_id} (TTL 300s).
+  같은 reply_to(스레드)로 다음 질문이 오면 그 키를 꺼내(pop) 답에서 설비 타입을 읽어 원 질의 + "(설비: X)"로 재검색한다.
+  타입이 안 읽히면 원 질의를 되묻기 없이(allow_clarify=False) 그대로 답한다 — 왕복은 스레드당 1회. TTL이 지나면 새 질문.
+  Redis 불가면 되묻기 답을 이어받지 못한다(새 질문으로 처리) — 가드와 같은 폴백 원칙.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import pathlib
@@ -37,10 +42,12 @@ from pydantic import ValidationError
 from events import InboundEvent, OutboundEvent
 from mq import topology
 from mq.publisher import DEFAULT_URL, build_message
+from rag.clarify import answered_type, rewrite_followup
 
 log = logging.getLogger("worker")
 
 IDEM_TTL_SEC = 24 * 3600
+CLARIFY_TTL_SEC = int(os.getenv("WORKER_CLARIFY_TTL_SEC", "300"))
 STALE_PROCESSING_SEC = float(os.getenv("WORKER_STALE_PROCESSING_SEC", "300"))   # LLM 90s + drain 120s 보다 길게
 
 
@@ -97,7 +104,45 @@ class IdempotencyGuard:
         if self._r is not None:
             await self._r.aclose()
 
-PipelineFn = Callable[[InboundEvent], OutboundEvent]
+class ClarifyStore:
+    """되묻기 대기 상태(스레드 → 원 질의). Redis 장애 때는 None/False + WARNING(가드와 같은 원칙)."""
+
+    def __init__(self, url: str | None):
+        self._r: aioredis.Redis | None = None
+        if url:
+            self._r = aioredis.from_url(url, socket_connect_timeout=1, socket_timeout=1, decode_responses=True)
+
+    @staticmethod
+    def key(thread_id: str) -> str:
+        return f"clarify:{thread_id}"
+
+    async def put(self, thread_id: str, question: str, event_id: str) -> bool:
+        if self._r is None:
+            return False
+        try:
+            await self._r.set(self.key(thread_id), json.dumps({"question": question, "event_id": event_id}, ensure_ascii=False),
+                              ex=CLARIFY_TTL_SEC)
+            return True
+        except (aioredis.RedisError, OSError, asyncio.TimeoutError) as e:
+            log.warning("clarify state for %s not stored (redis unavailable: %s)", thread_id, type(e).__name__)
+            return False
+
+    async def pop(self, thread_id: str) -> dict | None:
+        if self._r is None:
+            return None
+        try:
+            raw = await self._r.getdel(self.key(thread_id))
+            return json.loads(raw) if raw else None
+        except (aioredis.RedisError, OSError, asyncio.TimeoutError) as e:
+            log.warning("clarify state for %s not read (redis unavailable: %s)", thread_id, type(e).__name__)
+            return None
+
+    async def close(self) -> None:
+        if self._r is not None:
+            await self._r.aclose()
+
+
+PipelineFn = Callable[..., OutboundEvent]   # (inbound, *, allow_clarify=True) — 테스트 fake는 inbound만 받아도 된다
 
 
 class Worker:
@@ -106,6 +151,7 @@ class Worker:
         self.pipeline = pipeline
         self.url = url or os.getenv("RABBITMQ_URL", DEFAULT_URL)
         self.guard = IdempotencyGuard(redis_url if redis_url is not None else os.getenv("REDIS_URL") or None)
+        self.clarify = ClarifyStore(self.guard.url)
         self.drain_timeout = drain_timeout
         self.prefetch = prefetch
         self.warmup = warmup
@@ -176,6 +222,7 @@ class Worker:
                 log.info("draining done")
         await conn.close()
         await self.guard.close()
+        await self.clarify.close()
         log.info("connection closed. processed=%d failed=%d duplicates=%d", self.processed, self.failed, self.duplicates)
 
     async def _on_message(self, msg: AbstractIncomingMessage) -> None:
@@ -213,7 +260,14 @@ class Worker:
         log.info("processing %s (retry %d) text=%r", inbound.event_id, retry_count, inbound.text[:60])
         t0 = time.monotonic()
         try:
-            out = await asyncio.to_thread(self.pipeline, inbound)
+            run_inbound, allow_clarify = await self._resolve_clarify(inbound)
+            if allow_clarify:
+                out = await asyncio.to_thread(self.pipeline, run_inbound)
+            else:
+                out = await asyncio.to_thread(self.pipeline, run_inbound, allow_clarify=False)
+            if out.status == "clarify" and inbound.reply_to:
+                stored = await self.clarify.put(inbound.reply_to, inbound.text, inbound.event_id)
+                log.info("clarify asked for %s (thread %s, stored=%s)", inbound.event_id, inbound.reply_to, stored)
             if inbound.event_id in self._abandoned:
                 log.info("abandoned %s finished after drain timeout — result dropped, broker requeued the task", inbound.event_id)
                 return
@@ -250,6 +304,20 @@ class Worker:
                 log.warning("gave up %s after %d retries → %s + error reply to %s", inbound.event_id, retry_count, target,
                             topology.RESULTS)
             await msg.ack()
+
+    async def _resolve_clarify(self, inbound: InboundEvent) -> tuple[InboundEvent, bool]:
+        """스레드에 되묻기 대기 상태가 있으면 이 메시지를 그 답으로 해석한다. 돌려주는 값: (파이프라인에 넣을 inbound, 되묻기 허용)."""
+        pending = await self.clarify.pop(inbound.reply_to) if inbound.reply_to else None
+        if not pending:
+            return inbound, True
+        t = answered_type(inbound.text)
+        if t:
+            text = rewrite_followup(pending["question"], t)
+            log.info("clarify answered for %s: %r → %s, re-searching %r", pending.get("event_id"), inbound.text[:30], t, text[:60])
+            return inbound.model_copy(update={"text": text}), True
+        log.info("clarify answer for %s not understood (%r) — answering the original question without asking again",
+                 pending.get("event_id"), inbound.text[:30])
+        return inbound.model_copy(update={"text": pending["question"]}), False
 
     async def _publish_raw(self, msg: AbstractIncomingMessage, routing_key: str, headers: dict) -> None:
         await self._topo.events.publish(

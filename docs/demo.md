@@ -43,3 +43,20 @@ palettegen/paletteuse를 쓰는 이유: 기본 변환은 256색 전역 팔레트
 rm docs/demo.mov                          # mov는 커밋하지 않는다(.gitignore에 *.mov)
 docker compose stop
 ```
+
+## 5. 설비 되묻기 왕복 (3주차 Step 9, 11-03)
+compose 6개 healthy(이미지는 11-03 밤 재빌드본) 상태에서 채널에 멘션:
+```
+@incident-bot 챔버 진공이 계속 떨어지는데 어디부터 확인해야 해?
+```
+설비·코드가 없고 판정 통과 티켓이 설비 2종 이상이면 "검색 중…"이 **"어느 설비에서 난 증상인가요? • PECVD(CVD) — 예: [INC-…] … • PVD(스퍼터) …"**로 바뀐다(status=clarify).
+같은 스레드에 멘션으로 답한다(설비명·ID·키워드 아무거나):
+```
+@incident-bot PECVD-03
+```
+워커가 `clarify:{thread_ts}`(Redis, 300s)의 원 질의와 합쳐 "챔버 진공이 … (설비: PECVD)"로 재검색 → 근거 티켓이 PECVD로 모인 답. 확인:
+```bash
+docker compose logs worker --tail 30 | grep -E "clarify|processing|done"
+# clarify asked for Ev… (thread 1793…, stored=True) → clarify answered for Ev…: 'PECVD-03' → PECVD, re-searching '… (설비: PECVD)'
+```
+답이 설비로 안 읽히면("모르겠어요") 원 질의를 되묻기 없이 답한다. 300s 지나면 답글은 새 질문으로 처리된다. 스레드당 1회만 묻는다.

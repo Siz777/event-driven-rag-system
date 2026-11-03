@@ -316,3 +316,45 @@ def test_k_drain_timeout_releases_key_so_requeued_copy_is_reprocessed(caplog):
     assert w2.duplicates == 0 and "duplicate, ack only" not in caplog.text
     assert wait_depth(topology.RESULTS, 1) == 1 and wait_depth(topology.TASKS, 0) == 0
     assert r.get(f"idem:{EV.event_id}") == "done"
+
+
+def test_l_clarify_round_trip_rewrites_question_once(caplog):
+    """되묻기(status=clarify) → 같은 스레드의 답 → 원 질의 + (설비: X)로 재검색. 답을 못 읽으면 원 질의를 되묻기 없이 답한다."""
+    purge_all()
+    r = redis_client()
+    thread = "1793232753.000001"
+    for eid in ("Ev-c1", "Ev-c2", "Ev-c3", "Ev-c4"):
+        r.delete(f"idem:{eid}")
+    r.delete(f"clarify:{thread}")
+    seen = []
+
+    def pipeline(inb, allow_clarify=True):
+        seen.append((inb.event_id, inb.text, allow_clarify))
+        if "(설비:" in inb.text or not allow_clarify:
+            return inb.reply("답 [INC-2026-0001]", status="answered")
+        return inb.reply("어느 설비에서 난 증상인가요?", status="clarify")
+
+    q = InboundEvent(event_id="Ev-c1", source="slack_socket", channel="C1", user="U1", text="진공이 계속 떨어져요", reply_to=thread)
+    a = InboundEvent(event_id="Ev-c2", source="slack_socket", channel="C1", user="U1", text="PECVD-03 이에요", reply_to=thread)
+    with caplog.at_level("INFO", logger="worker"):
+        with RunningWorker(pipeline, redis_url=REDIS_URL) as w:
+            publish(q)
+            assert wait_for(lambda: w.processed == 1)
+            assert json.loads(r.get(f"clarify:{thread}"))["question"] == q.text and 0 < r.ttl(f"clarify:{thread}") <= 300
+            publish(a)
+            assert wait_for(lambda: w.processed == 2)
+            assert r.get(f"clarify:{thread}") is None                       # pop — 왕복 1회
+            # 다시 되묻기 → 답을 못 읽는 답글 → 원 질의를 allow_clarify=False로
+            q2 = InboundEvent(event_id="Ev-c3", source="slack_socket", channel="C1", user="U1", text="히터 온도가 안 올라와요", reply_to=thread)
+            x = InboundEvent(event_id="Ev-c4", source="slack_socket", channel="C1", user="U1", text="모르겠어요", reply_to=thread)
+            publish(q2)
+            assert wait_for(lambda: w.processed == 3)
+            publish(x)
+            assert wait_for(lambda: w.processed == 4)
+    assert seen == [("Ev-c1", q.text, True), ("Ev-c2", q.text + " (설비: PECVD)", True),
+                    ("Ev-c3", q2.text, True), ("Ev-c4", q2.text, False)]
+    assert wait_depth(topology.RESULTS, 4) == 4
+    outs = [OutboundEvent.from_json(m["payload"]) for m in peek(topology.RESULTS, 4)]
+    assert [o.status for o in outs] == ["clarify", "answered", "clarify", "answered"]
+    assert outs[1].in_reply_to == "Ev-c2" and outs[1].reply_to == thread   # 답은 답글 이벤트에, 같은 스레드에
+    assert "clarify answered for Ev-c1" in caplog.text and "not understood" in caplog.text

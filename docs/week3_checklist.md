@@ -54,6 +54,12 @@ Step은 작업 단계이며 달력 날짜와 무관. 진행 날짜는 docs/log/ 
 - [x] README: 아키텍처(parse → RRF → grade 분기), 결과 표 숫자 전부(experiments.jsonl 대조 완료), 설계 결정 4개, 기각된 실험·신뢰성 표, 한계 갱신
 - [x] 산출물: GIF(docs/demo.gif 26초 · 질문→답변 19.4초) + README ✓ + 3주차 요약 ✓
 
+## Step 9 — 설비 되묻기 (11-03 추가, 사용자 질의 124건 분석에서 도출)
+- [x] rag/clarify.py(조건·문구·답 해석) + graph clarify 노드(grade 뒤) + status=clarify + worker ClarifyStore(스레드당 1회, Redis 300s) + Slack 포맷
+- [x] 평가(scripts/eval_clarify.py): 발동 44/124, 오라클 답 후 R@5 0.75 → 0.831(상한 0.871), negative 발동 0/39, 미발동 실패 17건 그룹 R@5 0.529
+- [ ] 슬랙 수동 왕복 1회(되묻기 → 답 → 재검색) 로그 — 워커 왕복은 test_l로 검증, Slack 실기는 사용자(docs/demo.md 5절)
+- [x] README 결과 표 "되묻기 후" 줄 + 한계 절, 일지
+
 ## 주차 마무리
 - [x] docs/experiments/week3_summary.md, 일지 결정 칸(RRF 가중치 고정 이유, grade를 LLM으로 한 이유, 필터 on/off)
 - [x] 한 줄 후보: 하이브리드가 paraphrase_hard를 얼마나 살렸는지 한 숫자

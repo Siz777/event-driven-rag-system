@@ -112,6 +112,11 @@ def test_format_progress_passthrough():
     assert format_reply(_out("progress", text="검색 중…")) == "검색 중…"
 
 
+def test_format_clarify_is_the_question_itself():
+    q = "어느 설비에서 난 증상인가요?\n• PECVD(CVD) — 예: [INC-2026-0001]"
+    assert format_reply(_out("clarify", text=q)) == q
+
+
 # ---- ReplyConsumer._on_message: ack/nack 규칙 ----
 class FakeMsg:
     def __init__(self, body: bytes):

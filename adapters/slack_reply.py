@@ -50,6 +50,8 @@ def format_reply(out: OutboundEvent) -> str:
         return NO_MATCH_TEXT if not body or body.startswith("유사 이력 없음") else f"{NO_MATCH_TEXT}\n\n{body}"
     if out.status == "error":
         return f"{ERROR_TEXT} (사유: {(out.error or '')[:80]})"
+    if out.status == "clarify":            # 설비 되묻기(Step 9): 본문이 질문. 사용자는 이 스레드에 멘션으로 답한다
+        return out.text
     return out.text or "처리 중…"          # progress
 
 

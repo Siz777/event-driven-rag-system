@@ -36,7 +36,7 @@
 | reply_to | str \| null | 기본 null | 답을 달 스레드(Slack thread_ts). `inbound.reply_to` 있으면 그 값, 없으면 `inbound.event_id`. Slack 어댑터는 항상 질문 메시지 ts를 넣으므로 실제로는 늘 thread_ts |
 | text | str (≤4000) | ✔ | 답변 본문. `status=answered`면 비어 있을 수 없음 |
 | citations | list[Citation] | 기본 [] | 근거 티켓. `Citation = {ticket_id: "INC-…", score: float\|null (−1~1)}` |
-| status | `answered` \| `no_match` \| `error` \| `progress` | ✔ | answered: 근거 있는 답 / no_match: "유사 이력 없음" / error: 처리 실패 / progress: "검색 중…" 같은 중간 알림(Step 7 추가. 지금은 Socket 어댑터가 큐를 거치지 않고 직접 보낸다) |
+| status | `answered` \| `no_match` \| `error` \| `progress` \| `clarify` | ✔ | answered: 근거 있는 답 / no_match: "유사 이력 없음" / error: 처리 실패 / progress: "검색 중…" 같은 중간 알림(Step 7 추가. 지금은 Socket 어댑터가 큐를 거치지 않고 직접 보낸다) / clarify: 설비 되묻기(3주차 Step 9). 본문이 질문, citations 비어 있음. 사용자가 같은 스레드에 답하면 워커가 `clarify:{reply_to}`(Redis, 300s)에 둔 원 질의와 합쳐 재검색 — 스레드당 1회. 값 추가뿐이라 version 1 유지 |
 | error | str \| null | status=error면 ✔ | 실패 사유. status≠error면 있으면 안 됨 |
 | ts | datetime (tz-aware) | 기본 now(UTC) | 답 생성 시각 |
 | asked_at | datetime (tz-aware) \| null | 기본 null | 질문 원본 시각(`InboundEvent.ts` 복사, `inbound.reply()`가 채움). Slack 어댑터의 지연 로그용 — `reply_to`는 스레드 root ts라 스레드 안 질문은 틀린다(2주차 664.9s). 3주차 Step 0 추가, 기본 None이라 version 1 유지 |
