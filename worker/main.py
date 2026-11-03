@@ -1,7 +1,8 @@
 """aio-pika 워커: ai_tasks 1건 → InboundEvent → pipeline.answer → OutboundEvent → ai_results → ack.
 
 - prefetch 1, 수동 ack. ack은 결과 publish(confirm)까지 끝난 뒤에만.
-- 실패: x-retry-count+1 → retry 티어 큐(5s/25s/125s)로 publish → 원본 ack. 3회 넘으면 ai_tasks.dlq.
+- 실패: x-retry-count+1 → retry 티어 큐(5s/25s/125s)로 publish → 원본 ack. 3회 넘으면 ai_tasks.dlq + ai_results에 status=error 답(사용자에게
+  "답변 생성 실패"를 알린다 — 11-03 LLM 크레딧 소진 때 DLQ만 가고 사용자는 "검색 중…"에 멈춰 있던 것을 고침).
   nack(requeue=True)는 쓰지 않는다(같은 실패를 즉시 반복, 횟수 셀 수 없음).
 - 본문이 InboundEvent로 안 읽히는 독 메시지는 재시도 없이 바로 dlq.
 - 재시도/dlq publish 자체가 실패하면(브로커 단절) ack도 못 하므로 그대로 둔다 — 연결이 끊기면 브로커가 requeue.
@@ -239,6 +240,15 @@ class Worker:
             m = build_message(inbound, retry_count=nxt)
             m.headers["x-last-error"] = f"{type(e).__name__}: {e}"[:500]
             await self._topo.events.publish(m, routing_key=target, mandatory=True)
+            if target == topology.DLQ:                     # 재시도 소진: 사용자에게 실패를 알린다
+                out = inbound.reply("", status="error", error=f"{type(e).__name__}: {e}"[:500])
+                await self._topo.events.publish(
+                    Message(body=out.to_json().encode(), content_type="application/json", content_encoding="utf-8",
+                            delivery_mode=DeliveryMode.PERSISTENT, message_id=out.event_id, correlation_id=inbound.event_id,
+                            headers={"event_id": out.event_id, "in_reply_to": inbound.event_id, "status": "error"}),
+                    routing_key=topology.RESULTS, mandatory=True)
+                log.warning("gave up %s after %d retries → %s + error reply to %s", inbound.event_id, retry_count, target,
+                            topology.RESULTS)
             await msg.ack()
 
     async def _publish_raw(self, msg: AbstractIncomingMessage, routing_key: str, headers: dict) -> None:

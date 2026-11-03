@@ -1,5 +1,11 @@
-"""OpenAI 호환 LLM 클라이언트. 429/5xx 재시도, 선제 스로틀, JSON 파싱."""
+"""OpenAI 호환 LLM 클라이언트. 429/5xx 재시도, 선제 스로틀, JSON 파싱.
+
+429는 두 종류라 다르게 다룬다(11-03 장애에서 배움: 크레딧 소진을 레이트리밋으로 알고 1,500번 재시도했다).
+- rate_limit_exceeded: retry-after 만큼 기다렸다 재시도.
+- insufficient_quota(credit_balance_exhausted 등): 기다려도 소용없다 → 로그 찍고 즉시 실패. 워커는 재시도 티어 → DLQ → error 응답.
+"""
 import json
+import logging
 import os
 import random
 import re
@@ -8,6 +14,9 @@ import time
 from openai import APIStatusError, OpenAI, RateLimitError
 
 from . import config
+
+log = logging.getLogger("rag.llm")
+NON_RETRYABLE_429 = {"insufficient_quota", "credit_balance_exhausted", "billing_hard_limit_reached", "billing_not_active"}
 
 _client: OpenAI | None = None
 _judge: OpenAI | None = None
@@ -42,6 +51,15 @@ def _retry_after(e: Exception) -> float | None:
         return float(v) if v else None
     except Exception:
         return None
+
+
+def _error_code(e: Exception) -> tuple[str, str]:
+    """429/4xx 본문의 (type, code). 없으면 ("", "")."""
+    body = getattr(e, "body", None)
+    if isinstance(body, dict):
+        err = body.get("error", body) if isinstance(body.get("error", body), dict) else body
+        return str(err.get("type") or ""), str(err.get("code") or "")
+    return "", ""
 
 
 def _throttle() -> None:
@@ -80,6 +98,10 @@ def chat(user: str, system: str = "", model: str | None = None, temperature: flo
             resp = cl.chat.completions.create(model=m, messages=messages, **extra)
             return resp.choices[0].message.content or ""
         except RateLimitError as e:                       # 429
+            etype, code = _error_code(e)
+            log.warning("429 from %s: type=%s code=%s (attempt %d/%d)", m, etype or "?", code or "?", attempt + 1, max_attempts)
+            if etype in NON_RETRYABLE_429 or code in NON_RETRYABLE_429:
+                raise                                     # 크레딧 소진: 기다려도 소용없다
             wait = _retry_after(e) or min(60.0, 2 ** attempt + random.uniform(0, 1))
         except APIStatusError as e:
             if e.status_code < 500:                       # 400·401·404: 재시도 무의미

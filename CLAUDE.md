@@ -3,7 +3,7 @@
 `/clear` 또는 새 세션 직후 반드시 읽을 것: CLAUDE.md, 현재 주차 checklist(docs/weekN_checklist.md), 오늘·어제 일지(docs/log/). 읽기 전에 코드를 건드리지 않는다.
 
 ## 운영 규칙 — 메모리·리소스 (MacBook Air 16GB)
-- 워커는 한 벌만. 통합 테스트(pytest -m integration)는 `docker compose stop worker` 후 호스트 워커로 돌리고, 끝나면 `docker compose start worker`. 컨테이너 워커와 호스트 워커가 같은 큐를 동시에 소비하면 테스트가 깨지고(2026-10-29 test_worker 7개 실패) bge-m3가 두 벌 올라가 메모리가 부족해진다.
+- 워커는 한 벌만. 통합 테스트(pytest -m integration)는 `docker compose stop worker slack` 후 호스트 워커로 돌리고, 끝나면 `docker compose start worker slack`(slack 컨테이너도 ai_results를 소비해 결과 검증을 가로챈다 — 2026-11-03 test_c). 컨테이너 워커와 호스트 워커가 같은 큐를 동시에 소비하면 테스트가 깨지고(2026-10-29 test_worker 7개 실패) bge-m3가 두 벌 올라가 메모리가 부족해진다.
 - Ollama는 필요할 때만. Step 4 이후 심판은 gpt-5-mini이므로 Ollama 모델이 로드돼 있으면(`ollama ps`) 내린다(`ollama stop <model>`). 7B 로드 시 약 5GB.
 - Docker Desktop 제한: 디스크 32GB, 메모리 6GB. 워커 이미지는 CPU torch 고정(2.26GB), GPU torch가 섞이면 빌드가 실패하도록 되어 있다 — 그 안전장치를 풀지 말 것.
 - 작업 시작 전 `docker compose ps`로 6개 healthy 확인, 작업 끝나면 `docker compose stop`.

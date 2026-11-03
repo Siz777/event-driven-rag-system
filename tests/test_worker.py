@@ -156,6 +156,11 @@ def test_c_retries_exhausted_goes_to_dlq():
     assert InboundEvent.from_json(m["payload"]) == EV                       # 원문 보존
     assert m["properties"]["headers"]["x-retry-count"] == 4
     assert m["properties"]["headers"]["x-last-error"] == "ValueError: still broken"
+    assert wait_depth(topology.RESULTS, 1) == 1                            # 사용자에게 실패 알림
+    [r] = peek(topology.RESULTS)
+    out = OutboundEvent.from_json(r["payload"])
+    assert out.status == "error" and out.in_reply_to == EV.event_id and "still broken" in (out.error or "")
+    assert r["properties"]["headers"]["status"] == "error"
 
 
 def test_d_poison_message_goes_straight_to_dlq():
