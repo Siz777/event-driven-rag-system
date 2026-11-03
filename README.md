@@ -30,7 +30,7 @@ flowchart LR
 
 ## 결과
 
-합성 티켓 318건 · 평가셋 170행(positive 139 + negative 31) · k=5 · 같은 색인(bge-m3). 전 행은 `domains/manufacturing/eval/experiments.jsonl`, 요약은 docs/experiments/week3_summary.md. (11-03에 사람이 직접 쓴 질의 5행을 더해 175행으로 재평가 — overall 불변, 숫자는 docs/log/2026-11-02.md. 아래 표는 170행 기준.)
+합성 티켓 318건 · 평가셋 170행(positive 139 + negative 31) · k=5 · 같은 색인(bge-m3). 전 행은 `domains/manufacturing/eval/experiments.jsonl`, 요약은 docs/experiments/week3_summary.md. (11-03에 사람이 직접 쓴 질의 7행(원인명 대신 증상만 쓴 것)을 더해 177행으로 재평가 — overall R@5 0.885 → 0.877, 사람 7행은 전 방법 R@5 ≤ 0.714. 숫자는 docs/log/2026-11-02.md. 아래 표는 170행 기준.)
 R@5는 벡터 only에서 이미 0.885라 하이브리드로 변하지 않는다 — 보는 지표는 **R@1·MRR**과 negative 처리율.
 
 | 검색 방식 | human R@1 / MRR | 코드 단독 질의 (E-1101 · PECVD-03 E-1101 · E-5201) | overall R@1 / R@5 / MRR | negative "이력 없음" (31건) | GitHub 이슈 (docker/compose 중복 46쌍, 코퍼스 2600) R@5 [95% CI] |
