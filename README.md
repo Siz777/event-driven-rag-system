@@ -2,7 +2,9 @@
 
 슬랙에서 "이 장애 전에도 있었어?"라고 물으면, 과거 장애 이력을 검색해 근거 티켓과 함께 답하는 이벤트 기반 RAG 시스템.
 
-<!-- 데모 GIF 자리: docs/demo.md 절차로 촬영 → ![demo](docs/demo.gif) + "질문 → 검색 중… → 근거 티켓 답변, NN초" -->
+![demo](docs/demo.gif)
+
+실시간 녹화, 질문→답변 약 25초 (CMP-02 · E-5201 질문 → "검색 중…" → 근거 티켓 2건 답변. 로그 `latency_from_question=19.4s`, 녹화 구간은 Enter부터 답변 표시까지)
 
 Python · FastAPI · RabbitMQ · LangGraph · Qdrant · Kiwi/BM25 · Docker Compose
 
