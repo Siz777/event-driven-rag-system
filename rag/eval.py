@@ -1,7 +1,8 @@
 """검색 품질 평가. Recall@K, MRR, 난이도별 분해, 실패 사례 덤프.
 평가셋 형식(eval.jsonl): {query, relevant_ticket_ids, source_ticket_id, difficulty, source}
 difficulty: exact | paraphrase | multi_hop | human | negative (negative는 relevant 비어 있음)
-source: llm(기본, build_evalset) | human(append_human_queries). 같은 LLM이 쓴 글끼리 매칭되는 편향 확인용으로 따로 집계.
+source: llm(기본, build_evalset) | human | claude_chat_draft(1주차 19) | chatgpt_draft(11-03 108) — append_human_queries.
+같은 LLM이 쓴 글끼리 매칭되는 편향 확인용으로 출처별 따로 집계.
 MRR: source_ticket_id가 있으면 그 티켓의 순위, 없으면(사람 질의) relevant 중 첫 등장 순위.
 """
 import argparse

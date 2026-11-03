@@ -1,4 +1,4 @@
-# source=assistant_draft (AI 초안). 사용자가 고친 줄은 끝에 ' #human' 표시
+# 사용자가 직접 쓴 줄은 끝에 ' #human' 표시(source=human). 표시 없는 줄: 1주차 19줄 = claude_chat_draft, 11-03 추가 108줄 = chatgpt_draft(append 시 --draft-source로 지정)
 # --- 설비 생략
 챔버 진공이 계속 떨어지는데 어디부터 확인해야 해? | C01 #human
 펌프 쪽에서 평소랑 다른 소리가 나고 장비가 떨려요 | C09 #human

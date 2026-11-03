@@ -3,8 +3,9 @@
     펌프다운이 평소보다 오래 걸리는데 예전에 비슷한 일 있었어?	C01
     척이 안 잠기고 백사이드 헬륨 수치가 올라가 | C14
     설비와 무관한 질문이면 cause_id 자리에 NEG  (negative로 들어감)
-빈 줄과 #으로 시작하는 줄은 무시. 줄 끝에 ' #human'이 있으면 source=human(사람이 쓴/고친 질의), 없으면 source=assistant_draft.
-사용: python -m scripts.append_human_queries docs/human_queries.txt
+빈 줄과 #으로 시작하는 줄은 무시. 줄 끝에 ' #human'이 있으면 source=human(사람이 쓴/고친 질의), 없으면 --draft-source
+(기본 chatgpt_draft; 1주차 19줄은 claude_chat_draft로 재라벨됨 — 11-03).
+사용: python -m scripts.append_human_queries docs/human_queries.txt [--draft-source chatgpt_draft]
 """
 import argparse
 import re
@@ -20,6 +21,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("path")
     ap.add_argument("--eval", default=str(config.EVAL_DIR / "eval.jsonl"))
+    ap.add_argument("--draft-source", default="chatgpt_draft", help="#human 표시 없는 줄의 source 라벨")
     args = ap.parse_args()
 
     by_cause = defaultdict(list)
@@ -37,7 +39,7 @@ def main():
         if not m:
             skipped.append(f"{ln}: 형식 불일치 — {line[:40]}"); continue
         q, c = m["q"].strip(), m["c"]
-        source = "human" if m["h"] else "assistant_draft"
+        source = "human" if m["h"] else args.draft_source
         if q in existing:
             skipped.append(f"{ln}: 중복 — {q[:40]}"); continue
         if c != "NEG" and not by_cause.get(c):
