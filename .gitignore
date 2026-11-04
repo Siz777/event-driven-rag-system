@@ -13,3 +13,4 @@ domains/*/eval/eval_noise*.jsonl
 *.mov
 domains/*/eval/noise_results.jsonl
 domains/*/eval/clarify_results*.jsonl
+domains/*/eval/pairs_*.jsonl

@@ -17,7 +17,7 @@ from events import InboundEvent, OutboundEvent
 
 from . import config
 from .graph import CLARIFY, GRADE_MODE, MIN_COSINE, NO_MATCH, SYSTEM, ChatFn, GradeBatchFn, GradeFn, SearchFn  # noqa: F401
-from .graph import build_context, default_chat, default_grade, default_grade_batch, default_search  # noqa: F401
+from .graph import build_context, default_chat, default_grade, default_grade_batch, default_grade_cross_encoder, default_search  # noqa: F401
 from .graph import run as _run
 
 MIN_SCORE = MIN_COSINE
@@ -26,6 +26,6 @@ MIN_SCORE = MIN_COSINE
 def answer(inbound: InboundEvent, *, search: SearchFn = default_search, chat: ChatFn = default_chat,
            grade: GradeFn = default_grade, grade_batch: GradeBatchFn = default_grade_batch, grade_mode: str = GRADE_MODE,
            k: int = config.TOP_K, min_score: float = MIN_SCORE, trace: dict | None = None,
-           clarify: bool = CLARIFY, allow_clarify: bool = True) -> OutboundEvent:
+           clarify: bool = CLARIFY, allow_clarify: bool = True, grade_cross=default_grade_cross_encoder) -> OutboundEvent:
     return _run(inbound, k=k, trace=trace, allow_clarify=allow_clarify, search=search, chat=chat, grade=grade,
-                grade_batch=grade_batch, grade_mode=grade_mode, min_cosine=min_score, clarify=clarify)
+                grade_batch=grade_batch, grade_cross=grade_cross, grade_mode=grade_mode, min_cosine=min_score, clarify=clarify)

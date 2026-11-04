@@ -47,3 +47,43 @@ def test_rate_limit_exceeded_retries_then_gives_up(monkeypatch, caplog):
             llm.chat("q", "s", max_attempts=3)
     assert fake.calls == 3 and len(slept) == 3
     assert "code=rate_limit_exceeded" in caplog.text
+
+
+class FakeOK:
+    """usage가 붙은 정상 응답. prompt/completion 토큰은 호출마다 (100, 10)."""
+    def __init__(self):
+        self.calls = 0
+
+        class _C:
+            def __init__(s2, outer): s2.outer = outer
+            def create(s2, **kw):
+                s2.outer.calls += 1
+                usage = type("U", (), {"prompt_tokens": 100, "completion_tokens": 10})()
+                msg = type("M", (), {"content": "ok"})()
+                return type("R", (), {"usage": usage, "choices": [type("Ch", (), {"message": msg})()]})()
+        self.chat = type("Chat", (), {"completions": _C(self)})()
+
+
+def test_track_accumulates_tokens_and_cost(monkeypatch):
+    monkeypatch.setattr(llm, "client", lambda: FakeOK())
+    with llm.track(budget=0) as u:
+        llm.chat("q", "s", model="gpt-5-mini")
+        llm.chat("q", "s", model="gpt-5-mini")
+    assert u.calls == 2 and u.prompt_tokens == 200 and u.completion_tokens == 20 and u.total_tokens == 220
+    assert u.cost_usd() == round(200 * 0.25 / 1e6 + 20 * 2.0 / 1e6, 6) and "cost=$" in u.summary()
+    assert u.by_model["gpt-5-mini"] == {"calls": 2, "prompt": 200, "completion": 20}
+    with llm.track() as u2:
+        llm.chat("q", "s", model="some-local-model")
+    assert u2.cost_usd() is None and u2.summary().endswith("cost=?")
+    assert llm.current_usage() is None                       # 블록 밖에서는 계측 없음
+
+
+def test_token_budget_stops_further_calls(monkeypatch):
+    fake = FakeOK()
+    monkeypatch.setattr(llm, "client", lambda: fake)
+    with llm.track(budget=150) as u:
+        llm.chat("q", "s", model="gpt-5-mini")               # 누적 110 < 150 → 허용
+        llm.chat("q", "s", model="gpt-5-mini")               # 호출 전 누적 110 < 150 → 허용, 뒤에 220
+        with pytest.raises(llm.TokenBudgetExceeded):
+            llm.chat("q", "s", model="gpt-5-mini")           # 호출 전 누적 220 ≥ 150 → 차단(호출 안 함)
+    assert fake.calls == 2 and u.total_tokens == 220

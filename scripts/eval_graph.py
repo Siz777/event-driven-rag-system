@@ -3,7 +3,8 @@
 python -m scripts.eval_graph [--workers 3] [--out domains/.../eval/graph_results.jsonl]
 - 결과는 질의별 jsonl로 바로 기록(중단 후 재실행 시 끝난 질의는 건너뜀).
 - 지표: negative 31건 no_match 비율(목표 ≥0.9), positive 139건 잘못 no_match 비율(목표 ≤0.05),
-  grade가 거른 문서로 인한 R@5 변화(검색 top-5 vs 판정 통과 집합), 질의당 LLM 호출 수·노드별 지연.
+  grade가 거른 문서로 인한 R@5 변화(검색 top-5 vs 판정 통과 집합), 질의당 LLM 호출 수·노드별 지연,
+  질의당 토큰·비용(USD, rag.llm.PRICE_PER_MTOK)·LLM 순수 초(trace["usage"], 11-04).
 - 요약은 --summary 로 다시 뽑을 수 있다(LLM 호출 없음).
 """
 from __future__ import annotations
@@ -81,6 +82,14 @@ def summarize(results: list[dict]) -> dict:
                   "yes_rate_negative": round(statistics.mean(sum(r.get("graded") or []) / max(len(r.get("graded") or []), 1) for r in neg), 3)}
     ok = [r for r in results if r["status"] != "error"]
     t = lambda key: round(statistics.mean(r["timings"].get(key, 0.0) for r in ok), 2)
+    us = [r["usage"] for r in ok if r.get("usage")]
+    s["tokens_cost"] = {"n_with_usage": len(us),
+                        "tokens_per_query": round(statistics.mean(u["total_tokens"] for u in us), 1) if us else None,
+                        "prompt_per_query": round(statistics.mean(u["prompt_tokens"] for u in us), 1) if us else None,
+                        "completion_per_query": round(statistics.mean(u["completion_tokens"] for u in us), 1) if us else None,
+                        "cost_usd_per_query": round(statistics.mean(u["cost_usd"] or 0 for u in us), 5) if us else None,
+                        "cost_usd_total": round(sum(u["cost_usd"] or 0 for u in us), 4) if us else None,
+                        "llm_sec_per_query": round(statistics.mean(u["seconds"] for u in us), 2) if us else None}
     s["cost_latency"] = {"llm_calls_per_query": round(statistics.mean(r.get("llm_calls", 0) for r in ok), 2),
                          "llm_calls_total": sum(r.get("llm_calls", 0) for r in ok),
                          "mean_sec": {"retrieve": t("retrieve"), "grade": t("grade"), "generate": t("generate"), "total": t("total")},
@@ -116,7 +125,9 @@ def main() -> None:
                 res = fut.result()
                 done[res["query"]] = res
                 f.write(json.dumps(res, ensure_ascii=False) + "\n"); f.flush()
+                u = res.get("usage") or {}
                 print(f"[{i}/{len(todo)}] {res['difficulty']:<16} {res['status']:<9} gate={res.get('gate')} calls={res.get('llm_calls')} "
+                      f"tok={u.get('total_tokens', '?')} ${u.get('cost_usd') if u.get('cost_usd') is not None else '?'} "
                       f"{res['timings']['total'] if 'timings' in res else 0:.1f}s {res['query'][:40]}", flush=True)
     results = [done[r["query"]] for r in rows if r["query"] in done]
     s = summarize(results)

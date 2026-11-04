@@ -16,10 +16,16 @@ no_answer 본문: "검색 상위 k건 중 판정된 티켓 없음" + 가장 가�
   status=no_match이면 어댑터가 머리말을 붙이므로 본문은 상세만 담는다.
 
 검색·LLM·판정은 주입 가능(테스트는 fake). 예외는 삼키지 않는다 — 워커 재시도 경로가 처리.
-state.timings/llm_calls는 평가(scripts/eval_graph.py)용 계측.
+state.timings/llm_calls는 평가(scripts/eval_graph.py)용 계측. run()은 llm.track()으로 질의당 토큰·비용·지연을 모아 trace["usage"]와
+INFO 로그("llm usage …")에 남긴다 — 워커 로그에서 질의별 비용이 보인다. LLM_TOKEN_BUDGET을 넘기면 TokenBudgetExceeded(워커 재시도 경로).
+
+GRADE_MODE(판정 백엔드): api = per_doc(기본, 티켓별 API 호출) | batch(k건 1호출) | cross_encoder(로컬 cross-encoder 리랭커로 판정 —
+자리만 있고 NotImplemented. 11-04 실험 준비: scripts/build_pairs.py가 학습 쌍을 만든다. 구현되면 외부 전송 0회 경로가 된다).
 """
 from __future__ import annotations
 
+import contextvars
+import logging
 import os
 import re
 import time
@@ -31,12 +37,16 @@ from langgraph.graph import END, START, StateGraph
 from events import Citation, InboundEvent, OutboundEvent
 
 from . import config
+from . import llm
 from .clarify import ClarifyDecision, clarify_text, should_clarify
 from .retrieve import Hit
 
+log = logging.getLogger("rag.graph")
+
 MIN_COSINE = float(os.getenv("GRADE_MIN_COSINE", "0.50"))
 MIN_YES = int(os.getenv("GRADE_MIN_YES", "2"))
-GRADE_MODE = os.getenv("GRADE_MODE", "per_doc")      # per_doc: 티켓별 호출(병렬) / batch: 티켓 k건을 한 호출로 판정
+GRADE_MODE = os.getenv("GRADE_MODE", "per_doc")      # api|per_doc: 티켓별 호출(병렬) / batch: k건 1호출 / cross_encoder: 로컬(미구현)
+GRADE_MODES = ("api", "per_doc", "batch", "cross_encoder")
 LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "90"))
 GRADE_TIMEOUT = float(os.getenv("GRADE_TIMEOUT", "30"))
 CLARIFY = os.getenv("GRAPH_CLARIFY", "1") == "1"       # 설비 되묻기 on/off(평가 비교용)
@@ -95,6 +105,7 @@ SearchFn = Callable[[str, int], list[Hit]]
 ChatFn = Callable[[str, str], str]
 GradeFn = Callable[[str, Hit], bool]
 GradeBatchFn = Callable[[str, list[Hit]], list[bool]]
+GradeCrossFn = Callable[[str, list[Hit]], list[bool]]
 
 
 class State(TypedDict, total=False):
@@ -149,6 +160,12 @@ def default_grade_batch(question: str, hits: list[Hit]) -> list[bool]:
     return [h.ticket_id in yes for h in hits]
 
 
+def default_grade_cross_encoder(question: str, hits: list[Hit]) -> list[bool]:
+    """로컬 cross-encoder(예: bge-reranker-v2-m3 미세조정) 판정 자리. (question, ticket_text) 쌍 → 관련 확률 ≥ 임계값.
+    아직 없다 — scripts/build_pairs.py로 쌍을 만들고 실험한 뒤 채운다(docs/log 11-04 실험 설계)."""
+    raise NotImplementedError("GRADE_MODE=cross_encoder: 로컬 리랭커 판정은 미구현 (scripts/build_pairs.py → 실험 후)")
+
+
 def _sim(h: Hit) -> str:
     return f" (유사도 {h.cosine:.2f})" if h.cosine is not None else ""
 
@@ -170,10 +187,13 @@ def no_answer_text(k: int, hits: list[Hit]) -> str:
 
 # ---- 그래프 ----
 def build_graph(*, search: SearchFn = default_search, chat: ChatFn = default_chat, grade: GradeFn = default_grade,
-                grade_batch: GradeBatchFn = default_grade_batch, grade_mode: str = GRADE_MODE,
-                min_cosine: float = MIN_COSINE, min_yes: int = MIN_YES, parallel: int = 5, clarify: bool = CLARIFY):
-    if grade_mode not in ("per_doc", "batch"):
-        raise ValueError(f"unknown GRADE_MODE: {grade_mode}")
+                grade_batch: GradeBatchFn = default_grade_batch, grade_cross: GradeCrossFn = default_grade_cross_encoder,
+                grade_mode: str = GRADE_MODE, min_cosine: float = MIN_COSINE, min_yes: int = MIN_YES, parallel: int = 5,
+                clarify: bool = CLARIFY):
+    if grade_mode not in GRADE_MODES:
+        raise ValueError(f"unknown GRADE_MODE: {grade_mode} (expected one of {GRADE_MODES})")
+    if grade_mode == "api":
+        grade_mode = "per_doc"
     def retrieve(st: State) -> dict:
         t0 = time.monotonic()
         hits = search(st["question"], st["k"])
@@ -196,9 +216,13 @@ def build_graph(*, search: SearchFn = default_search, chat: ChatFn = default_cha
         if grade_mode == "batch":
             graded = [bool(x) for x in grade_batch(st["question"], hits)]
             calls = 1
+        elif grade_mode == "cross_encoder":
+            graded = [bool(x) for x in grade_cross(st["question"], hits)]     # 로컬 — LLM 호출 0
+            calls = 0
         else:
+            ctx = contextvars.copy_context()           # llm.track()의 Usage가 풀 스레드에도 보이게
             with ThreadPoolExecutor(max_workers=max(1, min(parallel, len(hits)))) as ex:
-                graded = list(ex.map(lambda h: bool(grade(st["question"], h)), hits))
+                graded = list(ex.map(lambda h: ctx.copy().run(lambda: bool(grade(st["question"], h))), hits))
             calls = len(hits)
         kept = [h for h, ok in zip(hits, graded) if ok]
         if len(kept) < min(min_yes, len(hits)):          # 검색 결과가 min_yes보다 적으면 전부 yes일 때만 통과
@@ -261,13 +285,16 @@ def run(inbound: InboundEvent, *, k: int = config.TOP_K, trace: dict | None = No
     allow_clarify=False는 되묻기 답이 해석되지 않았을 때 원 질의를 그대로 답하는 2회째 호출용(무한 왕복 금지)."""
     graph = build_graph(**kw)
     t0 = time.monotonic()
-    st = graph.invoke({"question": inbound.text, "k": k, "timings": {}, "clarify": allow_clarify})
+    with llm.track() as usage:
+        st = graph.invoke({"question": inbound.text, "k": k, "timings": {}, "clarify": allow_clarify})
+    total = time.monotonic() - t0
+    log.info("llm usage %s status=%s total_sec=%.1f text=%r", usage.summary(), st["status"], total, inbound.text[:40])
     if trace is not None:
         trace.update({"gate": st.get("gate"), "vector_top1": st.get("vector_top1"),
                       "hits": [h.ticket_id for h in st.get("hits", [])], "graded": st.get("graded", []),
                       "kept": [h.ticket_id for h in st.get("kept", [])], "llm_calls": st.get("llm_calls", 0),
-                      "candidates": st.get("candidates", []),
-                      "timings": {**st.get("timings", {}), "total": time.monotonic() - t0}, "status": st["status"]})
+                      "candidates": st.get("candidates", []), "usage": usage.as_dict(),
+                      "timings": {**st.get("timings", {}), "total": total}, "status": st["status"]})
     if not st.get("hits"):
         return inbound.reply(NO_MATCH, status="no_match")
     return inbound.reply(st["text"], citations=st.get("citations", []), status=st["status"])

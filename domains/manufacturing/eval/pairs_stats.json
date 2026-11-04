@@ -1,0 +1,66 @@
+{
+ "k": 20,
+ "method": "hybrid+filter",
+ "queries": {
+  "train": 218,
+  "val": 65
+ },
+ "pairs": {
+  "train": 4233,
+  "val": 1288
+ },
+ "positives": {
+  "train": 946,
+  "val": 281
+ },
+ "confusables": {
+  "train": 538,
+  "val": 149
+ },
+ "queries_without_positive_in_topk": {
+  "train": 11,
+  "val": 2
+ },
+ "by_difficulty": {
+  "exact": {
+   "pairs": 567,
+   "positives": 185,
+   "positive_ratio": 0.326
+  },
+  "human": {
+   "pairs": 2446,
+   "positives": 585,
+   "positive_ratio": 0.239
+  },
+  "multi_hop": {
+   "pairs": 568,
+   "positives": 199,
+   "positive_ratio": 0.35
+  },
+  "negative": {
+   "pairs": 780,
+   "positives": 0,
+   "positive_ratio": 0.0
+  },
+  "paraphrase": {
+   "pairs": 564,
+   "positives": 185,
+   "positive_ratio": 0.328
+  },
+  "paraphrase_hard": {
+   "pairs": 596,
+   "positives": 73,
+   "positive_ratio": 0.122
+  }
+ },
+ "positive_ratio": {
+  "train": 0.223,
+  "val": 0.218
+ },
+ "val_sources": {
+  "llm": 32,
+  "claude_chat_draft": 4,
+  "human": 10,
+  "chatgpt_draft": 19
+ }
+}

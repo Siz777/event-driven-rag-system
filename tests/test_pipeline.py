@@ -2,7 +2,7 @@
 import pytest
 
 from events import InboundEvent
-from rag.pipeline import NO_MATCH, SYSTEM, answer, build_context
+from rag.pipeline import NO_MATCH, SYSTEM, answer, build_context  # noqa: F401
 from rag.retrieve import Hit
 
 INB = InboundEvent(event_id="e1", source="cli", channel="terminal", user="me", text="펌프다운이 평소보다 오래 걸려요")
@@ -164,3 +164,20 @@ def test_batch_grade_mode_one_call_and_min_yes():
     assert out.status == "no_match"
     with pytest.raises(ValueError):
         answer(INB, search=lambda q, k: HITS, chat=lambda u, s: "x", grade_mode="weird")
+
+
+def test_grade_mode_api_alias_and_cross_encoder_stub():
+    out = answer(INB, search=lambda q, k: HITS, chat=lambda u, s: "[INC-2026-0012]", grade=YES, grade_mode="api")
+    assert out.status == "answered"                                     # api == per_doc
+    with pytest.raises(NotImplementedError, match="cross_encoder"):
+        answer(INB, search=lambda q, k: HITS, chat=lambda u, s: "x", grade_mode="cross_encoder")
+    calls = []
+    out = answer(INB, search=lambda q, k: HITS, chat=lambda u, s: "[INC-2026-0012]", grade_mode="cross_encoder",
+                 grade_cross=lambda q, hs: calls.append(len(hs)) or [True, True, False])
+    assert out.status == "answered" and calls == [3]                   # 주입하면 LLM 판정 없이 동작
+
+
+def test_trace_carries_usage_and_llm_zero_when_fakes():
+    trace = {}
+    answer(INB, search=lambda q, k: HITS, chat=lambda u, s: "[INC-2026-0012]", grade=YES, trace=trace)
+    assert trace["usage"]["calls"] == 0 and trace["usage"]["total_tokens"] == 0 and trace["usage"]["cost_usd"] == 0.0

@@ -60,6 +60,13 @@ Step은 작업 단계이며 달력 날짜와 무관. 진행 날짜는 docs/log/ 
 - [x] 슬랙 수동 왕복 1회(되묻기 → 답 → 재검색): 되묻기 6.9s, 답 25.6s(slack 로그) — docs/demo_clarify.gif(51초, README 두 번째 GIF)
 - [x] README 결과 표 "되묻기 후" 줄 + 한계 절, 일지
 
+## Step 10 준비 — cross-encoder 판정 (11-04, 실험은 다음)
+- [x] scripts/build_pairs.py: 283행 × 상위 20 → train 4,233 / val 1,288 쌍(질의 ID 분리, 사람 10건 val 전용, confusable 열)
+- [x] GRADE_MODE=api|per_doc|batch|cross_encoder 분기(cross_encoder는 NotImplemented 자리)
+- [x] 질의당 토큰·비용·지연 계측(rag.llm.track → 워커 로그·eval_graph) + LLM_TOKEN_BUDGET 가드
+- [x] README "데이터 경계" 절
+- [ ] 실험: 제로샷 → val 비교 → 학습(일지 11-04 설계 초안)
+
 ## 주차 마무리
 - [x] docs/experiments/week3_summary.md, 일지 결정 칸(RRF 가중치 고정 이유, grade를 LLM으로 한 이유, 필터 on/off)
 - [x] 한 줄 후보: 하이브리드가 paraphrase_hard를 얼마나 살렸는지 한 숫자
