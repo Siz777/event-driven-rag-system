@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
 import threading
 import time
@@ -26,6 +27,7 @@ from rag.pipeline import answer
 
 OUT = config.EVAL_DIR / "graph_results.jsonl"
 MODE = "per_doc"
+CLARIFY = True
 _SEARCH_LOCK = threading.Lock()   # bge-m3(MPS)·Qdrant local은 스레드 동시 호출에 안전하지 않다 — 검색만 직렬화, LLM 호출은 병렬
 
 
@@ -39,7 +41,7 @@ def run_one(row: dict) -> dict:
     trace: dict = {}
     t0 = time.monotonic()
     try:
-        out = answer(inb, trace=trace, search=locked_search, grade_mode=MODE)
+        out = answer(inb, trace=trace, search=locked_search, grade_mode=MODE, clarify=CLARIFY)
         err = None
     except Exception as e:                      # 평가는 계속 — 실패는 따로 센다
         out, err = None, f"{type(e).__name__}: {e}"[:200]
@@ -90,6 +92,10 @@ def summarize(results: list[dict]) -> dict:
                         "cost_usd_per_query": round(statistics.mean(u["cost_usd"] or 0 for u in us), 5) if us else None,
                         "cost_usd_total": round(sum(u["cost_usd"] or 0 for u in us), 4) if us else None,
                         "llm_sec_per_query": round(statistics.mean(u["seconds"] for u in us), 2) if us else None}
+    amb = [r["ambiguous"] for r in ok if r.get("ambiguous") is not None]
+    if amb:
+        s["two_stage"] = {"ambiguous_per_query": round(statistics.mean(amb), 2), "ambiguous_total": sum(amb),
+                          "queries_with_zero_api_grade": sum(1 for a in amb if a == 0)}
     s["cost_latency"] = {"llm_calls_per_query": round(statistics.mean(r.get("llm_calls", 0) for r in ok), 2),
                          "llm_calls_total": sum(r.get("llm_calls", 0) for r in ok),
                          "mean_sec": {"retrieve": t("retrieve"), "grade": t("grade"), "generate": t("generate"), "total": t("total")},
@@ -105,20 +111,34 @@ def main() -> None:
     ap.add_argument("--out", default=str(OUT))
     ap.add_argument("--summary", action="store_true", help="기존 결과만 집계")
     ap.add_argument("--limit", type=int, default=0)
-    ap.add_argument("--mode", choices=["per_doc", "batch"], default="per_doc", help="GRADE_MODE")
+    ap.add_argument("--mode", choices=["per_doc", "batch", "cross_encoder", "two_stage"], default="per_doc", help="GRADE_MODE")
     ap.add_argument("--eval-file", default="eval.jsonl", help="EVAL_DIR 안의 평가셋 파일(eval_noise.jsonl 등)")
+    ap.add_argument("--sources", default="", help="source 필터(쉼표). 예: llm,claude_chat_draft = 3주차 170행 기준")
+    ap.add_argument("--no-clarify", action="store_true", help="설비 되묻기 끔(Step 4 표와 같은 형식으로 비교할 때)")
+    ap.add_argument("--split", choices=["", "train", "val"], default="", help="pairs_<split>.jsonl의 qid에 든 질의만(Step 10: val 65)")
     args = ap.parse_args()
-    global MODE
+    global MODE, CLARIFY
     MODE = args.mode
-    out = Path(args.out if args.mode == "per_doc" or args.out != str(OUT) else OUT.with_name("graph_results_batch.jsonl"))
+    CLARIFY = not args.no_clarify
+    out = Path(args.out if args.mode == "per_doc" or args.out != str(OUT) else OUT.with_name(f"graph_results_{args.mode}.jsonl"))
     done = {r["query"]: r for r in load_jsonl(out)} if out.exists() else {}
     rows = load_jsonl(config.EVAL_DIR / args.eval_file)
+    if args.sources:
+        keep = set(args.sources.split(","))
+        rows = [r for r in rows if r.get("source", "llm") in keep]
+    if args.split:
+        from scripts.build_pairs import qid
+        qids = {p["qid"] for p in load_jsonl(config.EVAL_DIR / f"pairs_{args.split}.jsonl")}
+        rows = [r for r in rows if qid(r["query"]) in qids]
     todo = [r for r in rows if r["query"] not in done or done[r["query"]]["status"] == "error"]
     if args.limit:
         todo = todo[:args.limit]
     if not args.summary and todo:
         out.parent.mkdir(parents=True, exist_ok=True)
         locked_search("워밍업 PECVD-01 E-1101", 1)       # 모델·색인을 메인 스레드에서 먼저 로드(스레드 동시 로드는 크래시)
+        if MODE in ("cross_encoder", "two_stage"):
+            from rag import reranker
+            reranker.warmup()                               # 리랭커도 메인 스레드에서 먼저
         with ThreadPoolExecutor(max_workers=args.workers) as ex, open(out, "a", encoding="utf-8") as f:
             futs = {ex.submit(run_one, r): r for r in todo}
             for i, fut in enumerate(as_completed(futs), 1):
@@ -133,10 +153,20 @@ def main() -> None:
     s = summarize(results)
     print(json.dumps(s, ensure_ascii=False, indent=1))
     with open(config.EVAL_DIR / "experiments.jsonl", "a", encoding="utf-8") as f:
-        f.write(json.dumps({"method": f"graph(hybrid+filter+grade:{MODE})", "eval_file": args.eval_file, "k": config.TOP_K, "doc_text_mode": config.DOC_TEXT_MODE,
+        f.write(json.dumps({"method": f"graph(hybrid+filter+grade:{MODE})", "eval_file": args.eval_file, "sources": args.sources or "all", "split": args.split or "all",
+                            "clarify": CLARIFY, "k": config.TOP_K, "doc_text_mode": config.DOC_TEXT_MODE,
                             "n": len(results), "at": time.strftime("%Y-%m-%dT%H:%M"), "graph": s,
                             "embed_model": config.EMBED_MODEL, "collection": config.COLLECTION,
-                            "llm_model": config.LLM_MODEL, "grade_model": config.LLM_MODEL_SMALL}, ensure_ascii=False) + "\n")
+                            "llm_model": config.LLM_MODEL, "grade_model": config.LLM_MODEL_SMALL, **_reranker_info()}, ensure_ascii=False) + "\n")
+
+
+def _reranker_info() -> dict:
+    """cross_encoder/two_stage 행에 어떤 리랭커·임계값·band였는지 남긴다(제로샷과 파인튜닝 행이 같은 method 문자열이라 구분용)."""
+    if MODE not in ("cross_encoder", "two_stage"):
+        return {}
+    from rag import reranker
+    return {"reranker": {"model": reranker.model_path(), "threshold": reranker.threshold(), "band": list(reranker.band()),
+                         "max_length": reranker._max_length(), "device": os.getenv("RERANKER_DEVICE", "cpu")}}
 
 
 if __name__ == "__main__":

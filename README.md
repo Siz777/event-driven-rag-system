@@ -164,7 +164,7 @@ docs/log/                ← 개발 일지 (결정·실험·막힌 것·한 줄)
 
 | 전송 지점 | 내용 | 횟수 / 질의 | 측정(11-04, gpt-5-mini) | 교체 경로 |
 |---|---|---|---|---|
-| **LLM API** (`LLM_BASE_URL`, 기본 OpenAI) — grade | 질문 원문 + 검색 상위 티켓 1건 본문(증상·조치 기록·조치 결과·최종 원인) | 5회(k=5, 병렬). 되묻기 발동 시 10회 | 5회 ≈ 2.5k 입력 + 1.8k 출력 토큰 ≈ $0.004 | `GRADE_MODE=cross_encoder`(로컬 리랭커, **미구현** — 자리만) 또는 `LLM_BASE_URL`을 Ollama/vLLM(OpenAI 호환)로 |
+| **LLM API** (`LLM_BASE_URL`, 기본 OpenAI) — grade | 질문 원문 + 검색 상위 티켓 1건 본문(증상·조치 기록·조치 결과·최종 원인) | 5회(k=5, 병렬). 되묻기 발동 시 10회 | 5회 ≈ 2.5k 입력 + 1.8k 출력 토큰 ≈ $0.004 | `GRADE_MODE=cross_encoder`: 로컬 cross-encoder(bge-reranker-base 파인튜닝, `rag/reranker.py`) — 판정 전송 **0회**, 질의당 LLM 호출 5.8 → 0.8, 토큰 7.0k → 2.4k, $0.0071 → $0.0028. 값: positive false no_match 0 → 0.07(val 57), negative 7/8 → 8/8(일지 11-05 Step 10). 또는 `LLM_BASE_URL`을 Ollama/vLLM(OpenAI 호환)로 |
 | **LLM API** — generate | 질문 원문 + 판정 통과 티켓(≤5건) 본문 | 1회 | 6회 합계 ≈ 3.7k 입력 + 3.5k 출력 ≈ **$0.008/질의**, LLM 순수 54s(병렬 합) / 벽시계 31s | `LLM_BASE_URL` → 사내 OpenAI 호환 엔드포인트 |
 | **Slack API** | 질문 원문(수신), 답변 본문 + 티켓 ID(발신), "검색 중…" | 수신 1 · 발신 1~2 | — | `api/webhook`(FastAPI) 또는 CLI 어댑터 — 사내 메신저 어댑터 1개 추가 |
 | **Hugging Face Hub** | 모델 파일 다운로드만(bge-m3). 데이터는 나가지 않음 | 최초 1회 | — | 미리 받아 두고 `HF_HUB_OFFLINE=1` |

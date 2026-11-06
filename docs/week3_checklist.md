@@ -65,7 +65,8 @@ Step은 작업 단계이며 달력 날짜와 무관. 진행 날짜는 docs/log/ 
 - [x] GRADE_MODE=api|per_doc|batch|cross_encoder 분기(cross_encoder는 NotImplemented 자리)
 - [x] 질의당 토큰·비용·지연 계측(rag.llm.track → 워커 로그·eval_graph) + LLM_TOKEN_BUDGET 가드
 - [x] README "데이터 경계" 절
-- [ ] 실험: 제로샷 → val 비교 → 학습(일지 11-04 설계 초안)
+- [x] 실험(11-04~06): 제로샷 v2-m3(false no_match 0.105) → CPU 파인튜닝 bge-reranker-base 2변형×2에폭(MPS는 abort) → best = no_confusable e2(val AUC 0.922, false no_match 0.07, 정답 유실 1) → artifacts/reranker/best + manifest → eval_graph val 65 4열(API / 제로샷 / 파인튜닝 / two_stage). 일지 11-05
+- [ ] 남은 것: 라벨 정의(원인 일치)와 API 판정("관련")의 간극 — 상위 5에 정답 0~1건인 질의에서 false no_match 집중. 라벨을 "같은 설비·같은 증상군"으로 넓히거나 min_yes를 모드별로 두는 실험
 
 ## 주차 마무리
 - [x] docs/experiments/week3_summary.md, 일지 결정 칸(RRF 가중치 고정 이유, grade를 LLM으로 한 이유, 필터 on/off)

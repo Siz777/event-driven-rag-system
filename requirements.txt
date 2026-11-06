@@ -5,6 +5,8 @@ pydantic>=2.7
 numpy>=1.26
 tqdm>=4.66
 sentence-transformers>=3.0
+datasets>=3.0      # cross-encoder 파인튜닝(scripts/train_reranker.py)에만 필요
+accelerate>=1.1.0  # 위와 같음(transformers Trainer)
 qdrant-client>=1.10
 # 3주차 하이브리드 검색용 (지금 설치해도 무방)
 bm25s>=0.2

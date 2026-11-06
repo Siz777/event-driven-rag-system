@@ -169,9 +169,7 @@ def test_batch_grade_mode_one_call_and_min_yes():
 def test_grade_mode_api_alias_and_cross_encoder_stub():
     out = answer(INB, search=lambda q, k: HITS, chat=lambda u, s: "[INC-2026-0012]", grade=YES, grade_mode="api")
     assert out.status == "answered"                                     # api == per_doc
-    with pytest.raises(NotImplementedError, match="cross_encoder"):
-        answer(INB, search=lambda q, k: HITS, chat=lambda u, s: "x", grade_mode="cross_encoder")
-    calls = []
+    calls = []                                                          # 기본 grade_cross는 실제 모델을 올리므로 테스트는 주입만
     out = answer(INB, search=lambda q, k: HITS, chat=lambda u, s: "[INC-2026-0012]", grade_mode="cross_encoder",
                  grade_cross=lambda q, hs: calls.append(len(hs)) or [True, True, False])
     assert out.status == "answered" and calls == [3]                   # 주입하면 LLM 판정 없이 동작
@@ -181,3 +179,13 @@ def test_trace_carries_usage_and_llm_zero_when_fakes():
     trace = {}
     answer(INB, search=lambda q, k: HITS, chat=lambda u, s: "[INC-2026-0012]", grade=YES, trace=trace)
     assert trace["usage"]["calls"] == 0 and trace["usage"]["total_tokens"] == 0 and trace["usage"]["cost_usd"] == 0.0
+
+
+def test_two_stage_only_ambiguous_go_to_api():
+    api = []
+    out = answer(INB, search=lambda q, k: HITS, chat=lambda u, s: "[INC-2026-0012] [INC-2026-0100]", grade_mode="two_stage",
+                 cross_scores=lambda q, hs: [0.9, 0.3, 0.01], band=(0.05, 0.7),
+                 grade=lambda q, h: api.append(h.ticket_id) or True, trace=(tr := {}))
+    assert api == ["INC-2026-0015"]                                     # 0.3만 애매 → API 1회
+    assert tr["graded"] == [True, True, False] and tr["llm_calls"] == 2 and tr["ambiguous"] == 1   # 판정 1 + 생성 1
+    assert out.status == "answered" and [c.ticket_id for c in out.citations] == ["INC-2026-0012"]

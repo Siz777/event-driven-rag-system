@@ -19,8 +19,9 @@ no_answer 본문: "검색 상위 k건 중 판정된 티켓 없음" + 가장 가�
 state.timings/llm_calls는 평가(scripts/eval_graph.py)용 계측. run()은 llm.track()으로 질의당 토큰·비용·지연을 모아 trace["usage"]와
 INFO 로그("llm usage …")에 남긴다 — 워커 로그에서 질의별 비용이 보인다. LLM_TOKEN_BUDGET을 넘기면 TokenBudgetExceeded(워커 재시도 경로).
 
-GRADE_MODE(판정 백엔드): api = per_doc(기본, 티켓별 API 호출) | batch(k건 1호출) | cross_encoder(로컬 cross-encoder 리랭커로 판정 —
-자리만 있고 NotImplemented. 11-04 실험 준비: scripts/build_pairs.py가 학습 쌍을 만든다. 구현되면 외부 전송 0회 경로가 된다).
+GRADE_MODE(판정 백엔드): api = per_doc(기본, 티켓별 API 호출) | batch(k건 1호출) | cross_encoder(로컬 cross-encoder, rag/reranker.py —
+판정의 외부 전송 0회·LLM 호출 0. 11-04 Step 10: scripts/build_pairs.py → scripts/train_reranker.py로 고른 모델 + 임계값)
+| two_stage(cross-encoder 점수가 band [lo, hi] 밖이면 로컬 확정, 안이면 그 티켓만 API 판정 — 외부 전송은 애매한 티켓만).
 """
 from __future__ import annotations
 
@@ -45,8 +46,8 @@ log = logging.getLogger("rag.graph")
 
 MIN_COSINE = float(os.getenv("GRADE_MIN_COSINE", "0.50"))
 MIN_YES = int(os.getenv("GRADE_MIN_YES", "2"))
-GRADE_MODE = os.getenv("GRADE_MODE", "per_doc")      # api|per_doc: 티켓별 호출(병렬) / batch: k건 1호출 / cross_encoder: 로컬(미구현)
-GRADE_MODES = ("api", "per_doc", "batch", "cross_encoder")
+GRADE_MODE = os.getenv("GRADE_MODE", "per_doc")      # api|per_doc: 티켓별 호출(병렬) / batch: k건 1호출 / cross_encoder: 로컬 리랭커 / two_stage: 로컬+애매만 API
+GRADE_MODES = ("api", "per_doc", "batch", "cross_encoder", "two_stage")
 LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "90"))
 GRADE_TIMEOUT = float(os.getenv("GRADE_TIMEOUT", "30"))
 CLARIFY = os.getenv("GRAPH_CLARIFY", "1") == "1"       # 설비 되묻기 on/off(평가 비교용)
@@ -106,6 +107,7 @@ ChatFn = Callable[[str, str], str]
 GradeFn = Callable[[str, Hit], bool]
 GradeBatchFn = Callable[[str, list[Hit]], list[bool]]
 GradeCrossFn = Callable[[str, list[Hit]], list[bool]]
+ScoresFn = Callable[[str, list[Hit]], list[float]]
 
 
 class State(TypedDict, total=False):
@@ -119,6 +121,8 @@ class State(TypedDict, total=False):
     gate: str                  # cosine / llm / pass / empty
     clarify: bool              # 되묻기 허용 여부(세션 2회째는 False)
     candidates: list[str]      # 되묻기 후보 설비(발동 시)
+    cross_scores: list[float]  # two_stage: 리랭커 점수
+    ambiguous: int             # two_stage: API로 넘긴 티켓 수
     text: str
     citations: list[Citation]
     status: str
@@ -160,10 +164,21 @@ def default_grade_batch(question: str, hits: list[Hit]) -> list[bool]:
     return [h.ticket_id in yes for h in hits]
 
 
+def default_scores_cross_encoder(question: str, hits: list[Hit]) -> list[float]:
+    from .reranker import pair_text, scores
+    return scores(question, [pair_text(h.payload) for h in hits])
+
+
+def default_band() -> tuple[float, float]:
+    from .reranker import band
+    return band()
+
+
 def default_grade_cross_encoder(question: str, hits: list[Hit]) -> list[bool]:
-    """로컬 cross-encoder(예: bge-reranker-v2-m3 미세조정) 판정 자리. (question, ticket_text) 쌍 → 관련 확률 ≥ 임계값.
-    아직 없다 — scripts/build_pairs.py로 쌍을 만들고 실험한 뒤 채운다(docs/log 11-04 실험 설계)."""
-    raise NotImplementedError("GRADE_MODE=cross_encoder: 로컬 리랭커 판정은 미구현 (scripts/build_pairs.py → 실험 후)")
+    """로컬 cross-encoder 판정(rag/reranker.py): (question, ticket_text+최종 원인) 쌍 → 관련 확률 ≥ 임계값. LLM 호출 0, 외부 전송 0.
+    모델·임계값은 RERANKER_MODEL / RERANKER_THRESHOLD(없으면 artifacts/reranker/best + manifest, 그것도 없으면 허브 제로샷·0.5)."""
+    from .reranker import grade_cross
+    return grade_cross(question, hits)
 
 
 def _sim(h: Hit) -> str:
@@ -188,6 +203,7 @@ def no_answer_text(k: int, hits: list[Hit]) -> str:
 # ---- 그래프 ----
 def build_graph(*, search: SearchFn = default_search, chat: ChatFn = default_chat, grade: GradeFn = default_grade,
                 grade_batch: GradeBatchFn = default_grade_batch, grade_cross: GradeCrossFn = default_grade_cross_encoder,
+                cross_scores: ScoresFn = default_scores_cross_encoder, band: tuple[float, float] | None = None,
                 grade_mode: str = GRADE_MODE, min_cosine: float = MIN_COSINE, min_yes: int = MIN_YES, parallel: int = 5,
                 clarify: bool = CLARIFY):
     if grade_mode not in GRADE_MODES:
@@ -213,12 +229,26 @@ def build_graph(*, search: SearchFn = default_search, chat: ChatFn = default_cha
         if st["vector_top1"] is not None and st["vector_top1"] < min_cosine:
             return {"gate": "cosine", "graded": [False] * len(hits), "kept": [],
                     "timings": {**st["timings"], "grade": time.monotonic() - t0}}
+        st_extra: dict = {}
         if grade_mode == "batch":
             graded = [bool(x) for x in grade_batch(st["question"], hits)]
             calls = 1
         elif grade_mode == "cross_encoder":
             graded = [bool(x) for x in grade_cross(st["question"], hits)]     # 로컬 — LLM 호출 0
             calls = 0
+        elif grade_mode == "two_stage":
+            lo, hi = band or default_band()
+            sc = cross_scores(st["question"], hits)
+            amb = [i for i, x in enumerate(sc) if lo < x < hi]
+            graded = [x >= hi for x in sc]
+            if amb:
+                ctx = contextvars.copy_context()
+                with ThreadPoolExecutor(max_workers=max(1, min(parallel, len(amb)))) as ex:
+                    res = list(ex.map(lambda i: ctx.copy().run(lambda: bool(grade(st["question"], hits[i]))), amb))
+                for i, r in zip(amb, res):
+                    graded[i] = r
+            calls = len(amb)
+            st_extra = {"cross_scores": [round(x, 4) for x in sc], "ambiguous": len(amb)}
         else:
             ctx = contextvars.copy_context()           # llm.track()의 Usage가 풀 스레드에도 보이게
             with ThreadPoolExecutor(max_workers=max(1, min(parallel, len(hits)))) as ex:
@@ -227,7 +257,7 @@ def build_graph(*, search: SearchFn = default_search, chat: ChatFn = default_cha
         kept = [h for h, ok in zip(hits, graded) if ok]
         if len(kept) < min(min_yes, len(hits)):          # 검색 결과가 min_yes보다 적으면 전부 yes일 때만 통과
             kept = []
-        return {"gate": "llm" if not kept else "pass", "graded": graded, "kept": kept,
+        return {"gate": "llm" if not kept else "pass", "graded": graded, "kept": kept, **st_extra,
                 "llm_calls": st["llm_calls"] + calls, "timings": {**st["timings"], "grade": time.monotonic() - t0}}
 
     def _decision(st: State) -> ClarifyDecision | None:
@@ -294,6 +324,7 @@ def run(inbound: InboundEvent, *, k: int = config.TOP_K, trace: dict | None = No
                       "hits": [h.ticket_id for h in st.get("hits", [])], "graded": st.get("graded", []),
                       "kept": [h.ticket_id for h in st.get("kept", [])], "llm_calls": st.get("llm_calls", 0),
                       "candidates": st.get("candidates", []), "usage": usage.as_dict(),
+                      "cross_scores": st.get("cross_scores"), "ambiguous": st.get("ambiguous"),
                       "timings": {**st.get("timings", {}), "total": total}, "status": st["status"]})
     if not st.get("hits"):
         return inbound.reply(NO_MATCH, status="no_match")
