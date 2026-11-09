@@ -118,6 +118,7 @@ Slack에서 봇을 멘션하면(`@incident-bot 펌프다운이 평소보다 오�
 큐 상태는 http://localhost:15672 (guest/guest). 워커 종료는 `docker compose stop worker` — 처리 중인 1건을 끝내고(최대 120초) 나간다.
 
 - 모델 가중치(bge-m3, ~2GB)는 이미지에 넣지 않고 호스트 `~/.cache/huggingface`를 마운트한다. 첫 실행 때 받는다.
+- 판정은 기본 `GRADE_MODE=api`(LLM). 로컬 cross-encoder 판정(`GRADE_MODE=cross_encoder`)을 쓰려면 모델을 먼저 만든다: `python -m scripts.train_reranker train --variant no_confusable --device cpu --max-length 256 && python -m scripts.train_reranker pick` → `domains/manufacturing/artifacts/reranker/best`(gitignore, manifest 사본은 `eval/reranker_manifest.json`). "데이터 경계" 절에 모드 비교표.
 - 티켓 데이터(`domains/*/data/*.jsonl`, gitignore)는 `./domains`를 읽기 전용으로 마운트한다.
 - 큐·실패 경로·멱등성 규칙은 docs/events.md.
 
@@ -161,11 +162,11 @@ docs/log/                ← 개발 일지 (결정·실험·막힌 것·한 줄)
 
 ## 데이터 경계 (무엇이 어디로 나가는가)
 
-질문 1건이 처리되는 동안 외부로 나가는 것과 로컬에 머무는 것. 기밀 환경이면 "교체 경로"만 바꾸면 된다(코드 변경 없이 환경변수, 판정만 미구현).
+질문 1건이 처리되는 동안 외부로 나가는 것과 로컬에 머무는 것. 기밀 환경이면 "교체 경로"만 바꾸면 된다(코드 변경 없이 환경변수). 기본은 `GRADE_MODE=api`(판정도 LLM) — 정확도 우선. `GRADE_MODE=cross_encoder`는 **비용·보안 우선 모드**: 판정을 로컬 cross-encoder가 하고 티켓 본문은 생성 1회에만 나간다.
 
 | 전송 지점 | 내용 | 횟수 / 질의 | 측정(11-04, gpt-5-mini) | 교체 경로 |
 |---|---|---|---|---|
-| **LLM API** (`LLM_BASE_URL`, 기본 OpenAI) — grade | 질문 원문 + 검색 상위 티켓 1건 본문(증상·조치 기록·조치 결과·최종 원인) | 5회(k=5, 병렬). 되묻기 발동 시 10회 | 5회 ≈ 2.5k 입력 + 1.8k 출력 토큰 ≈ $0.004 | `GRADE_MODE=cross_encoder`: 로컬 cross-encoder(bge-reranker-base 파인튜닝, `rag/reranker.py`) — 판정 전송 **0회**, 질의당 LLM 호출 5.8 → 0.8, 토큰 7.0k → 2.4k, $0.0071 → $0.0028. 값: positive false no_match 0 → 0.07(val 57), negative 7/8 → 8/8(일지 11-05 Step 10). 또는 `LLM_BASE_URL`을 Ollama/vLLM(OpenAI 호환)로 |
+| **LLM API** (`LLM_BASE_URL`, 기본 OpenAI) — grade | 질문 원문 + 검색 상위 티켓 1건 본문(증상·조치 기록·조치 결과·최종 원인) | 5회(k=5, 병렬). 되묻기 발동 시 10회 | 5회 ≈ 2.5k 입력 + 1.8k 출력 토큰 ≈ $0.004 | `GRADE_MODE=cross_encoder`(로컬 리랭커, `rag/reranker.py`, 아래 비교표) — 판정 전송 0회. 또는 `LLM_BASE_URL`을 Ollama/vLLM(OpenAI 호환)로 |
 | **LLM API** — generate | 질문 원문 + 판정 통과 티켓(≤5건) 본문 | 1회 | 6회 합계 ≈ 3.7k 입력 + 3.5k 출력 ≈ **$0.008/질의**, LLM 순수 54s(병렬 합) / 벽시계 31s | `LLM_BASE_URL` → 사내 OpenAI 호환 엔드포인트 |
 | **Slack API** | 질문 원문(수신), 답변 본문 + 티켓 ID(발신), "검색 중…" | 수신 1 · 발신 1~2 | — | `api/webhook`(FastAPI) 또는 CLI 어댑터 — 사내 메신저 어댑터 1개 추가 |
 | **Hugging Face Hub** | 모델 파일 다운로드만(bge-m3). 데이터는 나가지 않음 | 최초 1회 | — | 미리 받아 두고 `HF_HUB_OFFLINE=1` |
@@ -174,6 +175,21 @@ docs/log/                ← 개발 일지 (결정·실험·막힌 것·한 줄)
 로컬에 머무는 것: 임베딩(bge-m3, 호스트/컨테이너 CPU·MPS), Qdrant(벡터+payload), BM25 색인·Kiwi 사전, RabbitMQ·Redis(이벤트·멱등 키·되묻기 상태), LangGraph 상태, 티켓 원본(`domains/*/data`), 역분류 심판(`JUDGE_BASE_URL`=Ollama qwen2.5:7b — 데이터 생성 단계에서만 씀). 티켓 본문은 grade·generate의 프롬프트로만 외부에 나간다 — 색인 전체가 나가는 일은 없다.
 
 가드·계측: 질의마다 `rag.llm.track()`이 호출 수·토큰·추정 비용(USD, `PRICE_PER_MTOK`)·LLM 초를 모아 워커 로그 `llm usage calls=6 tokens=3744+3453=7197 llm_sec=53.6 cost=$0.0078`로 남기고(`scripts/eval_graph.py`는 질의당 평균을 집계), `LLM_TOKEN_BUDGET`(질의당 총 토큰, 기본 0=무제한)을 넘기면 다음 호출 전에 실패시킨다 — 되묻기 루프·긴 컨텍스트 폭주 가드. 출력 토큰이 큰 이유: gpt-5-mini의 reasoning 토큰이 completion에 포함된다.
+
+**판정 모드 비교** (val 65 질의 = negative 8 · positive 57, 되묻기 off, gpt-5-mini 생성·판정, 3주차 Step 10 · 일지 11-05)
+
+| | `api` (기본) | `cross_encoder` 제로샷 bge-reranker-v2-m3 | `cross_encoder` 파인튜닝 bge-reranker-base | `two_stage` (로컬 + 애매한 티켓만 API) |
+|---|---|---|---|---|
+| negative no_match | 7/8 | 8/8 | 8/8 | 8/8 |
+| positive false no_match | **0/57** | 7/57 | 4/57 (어휘 없는 질의) | 4/57 |
+| 인용 R@5 | 0.789 | 0.737 | 0.754 | 0.772 |
+| 판정 외부 전송 (티켓 본문) | 5회/질의 | **0** | **0** | 2.4회/질의 (49%) |
+| LLM 호출 / 토큰 / 비용 (질의당) | 5.8 / 7.0k / $0.0071 | 0.8 / 2.4k / $0.0027 | **0.8 / 2.4k / $0.0028** | 3.3 / 4.5k / $0.0048 |
+| 판정 지연 / 총 지연 | 7.0s / 24.9s | 1.7s / 17.8s | **0.4s / 17.4s** | 5.7s / 22.3s |
+
+- 파인튜닝 모델은 비용 60%·판정 지연 7초를 줄이고 판정 전송을 없앴지만 positive 4건(7%)을 "이력 없음"으로 돌린다 — 기본값을 `api`로 두는 이유. 값을 받아들일 수 있는 환경(기밀, 비용)에서 `GRADE_MODE=cross_encoder`.
+- `two_stage`는 득이 없다: 점수가 보정돼 있지 않아(학습에서 뺀 confusable 이웃 티켓이 1.0 근처) "자신 있는 yes" 구간을 잡을 수 없고, 로컬 yes의 절반을 API가 다시 봐 토큰만 1.9배. 분위수 band(음성 99분위 / 양성 1분위)는 lo 0.9998 > hi 0.0207로 뒤집힌다(일지 11-09).
+- 모델 파일(1.1GB)은 저장소에 없다. `domains/manufacturing/eval/reranker_manifest.json`(best 이름·임계값·band)과 재현 스크립트만: `python -m scripts.build_pairs && python -m scripts.train_reranker train --variant no_confusable --device cpu --max-length 256 && python -m scripts.train_reranker pick` (M1 CPU 약 70분). 모델 없이 `GRADE_MODE=cross_encoder`를 켜면 허브 제로샷(bge-reranker-v2-m3, 임계값 0.5)으로 뜬다 — 위 표의 제로샷 열과도 다른 설정이니 모델을 만들거나 `GRADE_MODE=api`를 쓴다.
 
 ## 한계와 다음 단계
 

@@ -193,7 +193,9 @@ def choose_band(rows: list[dict], scores: list[float], threshold: float, precisi
     - lo = 단일 임계값(threshold): 그 아래는 cross_encoder 모드와 똑같이 로컬 no. two_stage는 "로컬 yes 중 자신 없는 것만" API로 넘긴다.
     - hi: 점수 ≥ hi 인 쌍의 양성 비율(위에서부터 누적 precision) ≥ precision 이 되는 가장 낮은 점수 → 로컬 yes 확정.
     11-06 1차·2차 시도의 교훈: lo를 train 점수 분포로 잡으면(음성 누적 precision 0.95 → 0.86, 양성 5분위 → 0.72) 모델이 train 쌍을
-    봤기 때문에 lo가 너무 높아진다(val 양성 22건이 lo 아래, positive false no_match 0.404). train 분포는 hi 쪽(음성이 위로 올라오는가)에만 쓴다."""
+    봤기 때문에 lo가 너무 높아진다(val 양성 22건이 lo 아래, positive false no_match 0.404). train 분포는 hi 쪽(음성이 위로 올라오는가)에만 쓴다.
+    11-09 3차(분위수 band: lo = train 음성 99분위, hi = train 양성 1분위)는 lo 0.9998 > hi 0.0207로 뒤집힘 — 음성 상위 58건 중 55건이
+    confusable 쌍(학습에서 뺀 이웃 원인)이라 1.0 근처에 몰린다. 점수가 보정돼 있지 않아 분위수 band는 성립하지 않는다(일지 11-09)."""
     ps = sorted((s, p["label"]) for p, s in zip(rows, scores) if p["rank"] <= TOP_K)
     n = len(ps)
     lo = threshold
@@ -237,6 +239,7 @@ def pick(args) -> None:
                                                    "band": [round(lo, 4), round(hi, 4)], "band_info": info,
                                                    "val": best["val"], "picked_at": time.strftime("%Y-%m-%dT%H:%M")},
                                                   ensure_ascii=False, indent=1), encoding="utf-8")
+    shutil.copy(dst / "manifest.json", config.EVAL_DIR / "reranker_manifest.json")   # 모델 파일은 gitignore, manifest만 저장소에
     print("best:", best["name"], "threshold", best["threshold"], "band", (round(lo, 4), round(hi, 4)), info, "val", best["val"])
 
 

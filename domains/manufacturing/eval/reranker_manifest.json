@@ -1,0 +1,26 @@
+{
+ "name": "ft_no_confusable_e2",
+ "source_model": "/Users/macbook/Desktop/event-driven-rag-system/domains/manufacturing/artifacts/reranker/ft_no_confusable_bge-reranker-base/checkpoint-462",
+ "threshold": 0.0047,
+ "max_length": 256,
+ "band": [
+  0.0047,
+  0.9993
+ ],
+ "band_info": {
+  "n_top5_pairs": 1090,
+  "ambiguous_pairs": 377,
+  "ambiguous_rate": 0.346,
+  "precision_hi": 0.95
+ },
+ "val": {
+  "n_neg": 8,
+  "n_pos": 57,
+  "neg_no_match": 1.0,
+  "false_no_match": 0.07,
+  "dropped_relevant": 1,
+  "dropped_rate": 0.018,
+  "kept_recall@5": 0.772
+ },
+ "picked_at": "2026-11-06T11:35"
+}
