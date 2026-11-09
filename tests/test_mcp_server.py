@@ -61,9 +61,13 @@ def test_ask_incident_maps_outbound_and_trace():
     assert out["event_id"].startswith("mcp-")
 
 
-def test_aggregate_tool_logs_and_returns_count(call_log):
+def test_aggregate_tool_logs_and_returns_count(call_log, monkeypatch):
+    import rag.tools
+    monkeypatch.setattr(rag.tools, "_tickets", lambda: [                # 티켓 데이터는 gitignore — CI에는 없다
+        {"ticket_id": "INC-2026-0300", "cause_id": "C33", "equipment_type": "CMP", "equipment_id": "CMP-02", "alarm_code": "E-5201",
+         "downtime_min": 60, "date": "2026-07-01", "canonical_resolution": "x", "root_cause": "y"}])
     out = tools.aggregate(alarm_code="E-5201", client="t/0")
-    assert out["filter"] == {"alarm_code": "E-5201"} and out["count"] > 0 and "by_cause" in out
+    assert out["filter"] == {"alarm_code": "E-5201"} and out["count"] == 1 and "by_cause" in out
     assert json.loads(call_log.read_text().splitlines()[-1])["tool"] == "aggregate_tickets"
     assert "error" in tools.aggregate(client="t/0")
 

@@ -32,9 +32,11 @@ def test_aggregate_by_alarm_has_cause_breakdown_and_since():
     assert "error" in aggregate_tickets(tickets=T) and aggregate_tickets(cause_id="C99", tickets=T)["count"] == 0
 
 
-def test_run_tool_guards():
+def test_run_tool_guards(monkeypatch):
+    import rag.tools
+    monkeypatch.setattr(rag.tools, "_tickets", lambda: T)               # 티켓 데이터는 gitignore — CI에는 없다
     assert "error" in run_tool("nope", "{}") and "error" in run_tool(TOOL_NAME, "{not json")
-    assert run_tool(TOOL_NAME, json.dumps({"cause_id": "C01", "bogus": 1}))["count"] >= 0
+    assert run_tool(TOOL_NAME, json.dumps({"cause_id": "C01", "bogus": 1}))["count"] == 2
 
 
 INB = InboundEvent(event_id="e1", source="cli", channel="terminal", user="me", text="E-1101 평균 복구 시간이 얼마나 돼?")
