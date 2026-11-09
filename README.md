@@ -208,6 +208,24 @@ docs/log/                ← 개발 일지 (결정·실험·막힌 것·한 줄)
 - `two_stage`는 득이 없다: 점수가 보정돼 있지 않아(학습에서 뺀 confusable 이웃 티켓이 1.0 근처) "자신 있는 yes" 구간을 잡을 수 없고, 로컬 yes의 절반을 API가 다시 봐 토큰만 1.9배. 분위수 band(음성 99분위 / 양성 1분위)는 lo 0.9998 > hi 0.0207로 뒤집힌다(일지 11-09).
 - 모델 파일(1.1GB)은 저장소에 없다. `domains/manufacturing/eval/reranker_manifest.json`(best 이름·임계값·band)과 재현 스크립트만: `python -m scripts.build_pairs && python -m scripts.train_reranker train --variant no_confusable --device cpu --max-length 256 && python -m scripts.train_reranker pick` (M1 CPU 약 70분). 모델 없이 `GRADE_MODE=cross_encoder`를 켜면 허브 제로샷(bge-reranker-v2-m3, 임계값 0.5)으로 뜬다 — 위 표의 제로샷 열과도 다른 설정이니 모델을 만들거나 `GRADE_MODE=api`를 쓴다.
 
+## 평가 게이트 (MLOps-lite, `scripts/eval_gate.py` · `.github/workflows/ci.yml`)
+
+핵심 지표가 기준치 밑이면 exit 1. 기준치 = 2026-11-09 측정값 − 0.02 — 지표를 올리면 기준치도 같이 올리고, 내리는 커밋은 일지에 이유를 적는다.
+
+| 지표 | 평가셋 | 측정 | 기준 | 어디서 |
+|---|---|---|---|---|
+| vector R@5 · hybrid+filter R@5 | 170행 기준 positive 139 (source llm 120 + claude_chat_draft 19) | 0.885 · 0.885 | ≥ 0.865 | CI는 기록값(experiments.jsonl 최신 행), 로컬 `--mode live`는 검색 재실행(LLM 0) |
+| graph(api) negative "이력 없음" · positive false no_match | val 65 (negative 8 · positive 57) | 0.875 · 0.0 | ≥ 0.855 · ≤ 0.02 | 기록값. `--graph live`면 val 65 재실행(LLM ≈ 390회, ≈ $0.5) |
+| reranker manifest (`eval/reranker_manifest.json`) | val 65 | neg 1.0 · false no_match 0.070 | ≥ 0.98 · ≤ 0.09, threshold∈(0,1), band lo = threshold ≤ hi, max_length > 0, 로컬 best와 이름 일치 | 항상 |
+
+```bash
+python -m scripts.eval_gate                        # CI와 같은 것: 기록값 + manifest (데이터·모델·LLM 불필요)
+python -m scripts.eval_gate --mode live            # push 전: 검색 139행 재실행(bge-m3·Qdrant·BM25 색인 필요, 약 1분)
+python -m scripts.eval_gate --mode live --graph live   # 판정까지 — 비용이 드니 그래프를 건드린 커밋만
+```
+
+CI(GitHub Actions)는 유닛 테스트(통합 marker 제외, LLM 0) + `eval_gate --mode recorded`. 티켓 데이터·색인·bge-m3가 저장소에 없어서 CI가 검색을 다시 돌리지는 못한다 — "기록값이 기준을 넘는가 + manifest가 깨지지 않았는가"까지가 CI, 검색 재실행은 로컬 pre-push. human 124행(R@5 0.75)은 아직 개선 중이라 게이트 밖(보고만). 게이트 실행 기록은 `eval/gate_results.jsonl`.
+
 ## 한계와 다음 단계
 
 - paraphrase_hard(용어를 전혀 안 쓴 질의) R@5 0.567 — 어휘 매칭으로 구제되지 않는 임베딩 한계. 개선 대상에서 제외하고 숫자만 보고한다.

@@ -13,5 +13,11 @@
 - [x] scripts/eval_tools.py off/on → multi_hop any_hit 0.233 → 0.567, 호출 20/30, 충실도 0.85, 대조군 오호출 0/65, 토큰 +16%(전체) — README 결과 표
 - [x] README 아키텍처(MCP 입구·tool 노드), 결과 표, 일지, GRAPH_TOOLS 기본 on, 커밋·푸시
 
+## MLOps-lite
+- [x] scripts/eval_gate.py: 기록값/실측 두 모드, 기준치 = 측정 − 0.02, reranker manifest 검증, exit 1
+- [x] .github/workflows/ci.yml: 유닛 테스트(통합 제외) + eval_gate --mode recorded. CPU torch 고정(constraints-worker.txt)
+- [x] README "평가 게이트" 절
+- [ ] CI 첫 실행 결과 확인(push 후 Actions 탭 — 의존성 설치 ~5분 예상)
+
 ## 하지 않는 것
 - MCP 원격 전송(streamable-http)·인증, 도구 2회 이상 연쇄, 티켓 쓰기 도구
