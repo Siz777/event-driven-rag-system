@@ -109,6 +109,24 @@ progress ts는 `adapters/progress.py`(Redis, TTL 1h, 실패 시 폴백=새 답�
 Socket 재전송으로 같은 event_id가 두 번 오면 워커 멱등 가드가 거른다(progress는 두 번 찍힐 수 있음). 채널 허용 목록 `SLACK_ALLOWED_CHANNELS`(비우면 전부).
 지연 측정: `reply_to`가 Slack 메시지 ts(epoch)라 답글 소비자가 `latency_from_question`을 로그에 찍는다.
 
+## 2-c. 입구 셋째: MCP 서버 (`mcp_server/`, Step 11) — 결정: 동기 입구 vs 비동기 입구
+
+`python -m mcp_server.server`(stdio)가 도구 3개를 낸다: `search_tickets`(검색만, LLM 0) · `get_ticket`(원문 1건) · `ask_incident`(전체 그래프 = 워커와 같은 `rag.pipeline.answer`). **큐를 거치지 않는다** — 클라이언트(Claude Code 등 에이전트)가 서버 프로세스를 자식으로 띄우고 요청-응답으로 부른다. 프로젝트 `.mcp.json`에 등록, 호출 로그는 `logs/mcp_calls.jsonl`(클라이언트 이름·인자·ms·결과 요약), 샘플은 docs/experiments/mcp_call_sample.md.
+
+| | 비동기 입구 (Slack/HTTP → RabbitMQ → 워커) | 동기 입구 (MCP stdio → rag 직접 호출) |
+|---|---|---|
+| 호출자 | 사람이 메신저에서. 답을 기다리지 않고 자리를 뜬다 | 에이전트(LLM)가 도구로. 결과를 받아야 다음 추론을 한다 |
+| 내구성 | 큐가 들고 있다(durable·persistent). 워커가 죽어도 메시지는 남는다 | 없음. 서버 프로세스가 죽으면 그 호출은 실패로 돌아가고 클라이언트가 다시 부른다 |
+| 재시도·DLQ | 워커 retry 티어 + `ai_tasks.dlq` | 클라이언트 몫(에이전트 루프가 판단). 서버는 예외를 삼키지 않고 isError로 돌려준다 |
+| 멱등성 | `event_id` 멱등 키(Redis) — 재전송 방지 | 키 없음. 같은 질문 두 번 = 두 번 계산(검색은 결정적, 생성은 아님). 에이전트가 같은 도구를 반복 호출하는 게 정상 동작이라 막지 않는다 |
+| 되묻기(clarify) | 워커가 Redis `clarify:{thread}` 300s로 상태를 들고 스레드 답을 기다린다 | 상태를 서버가 들지 않는다. `status=clarify` + `candidates`를 돌려주고 **대화는 호출자가 들고 있다** — 에이전트가 사용자에게 묻고 설비명을 붙여 다시 부른다 |
+| 비용 가드 | `LLM_TOKEN_BUDGET`(질의당, graph.run 안) — 동일 | 동일(같은 함수). 추가로 호스트 LLM 비용은 호출자 쪽 |
+| 지연 | Slack 왕복 ≈ 20~30s(큐 지연은 ms, 대부분 LLM) | search 10 ms(워밍업 후) / ask 15~30s. 첫 호출 전 모델 로드 ~6s는 lifespan 백그라운드 스레드가 미리 |
+| 동시성 | 워커 1벌(prefetch 1) | 클라이언트당 서버 프로세스 1개 = bge-m3 한 벌 더(≈2.5GB). 워커 컨테이너와 같이 띄우면 두 벌 — 16GB에서 셋째는 안 된다 |
+| 언제 이걸 쓰나 | 질문자가 사람이고 답이 늦어도 되는 곳. 장애 격리·백프레셔가 필요한 곳 | 호출자가 LLM이고 결과를 보고 다음 행동을 고를 때(검색 결과를 보고 설비를 좁혀 다시 검색, 티켓 원문을 읽고 집계). 큐를 끼우면 "결과를 기다리는 폴링"만 늘어난다 |
+
+결정: **입구만 다르고 본체는 하나.** MCP도 `rag.pipeline.answer`를 부르므로 status 규칙·판정·되묻기 조건·비용 계측이 워커와 같다. 두 입구가 갈리는 곳은 "누가 상태를 드느냐"(큐·Redis vs 호출자)와 "누가 재시도하느냐"(워커 vs 에이전트)뿐이다. stdout은 프로토콜 채널이라 서버가 fd 1을 stderr로 돌려 rag의 print()가 섞이지 않게 한다.
+
 ## 3. 큐 토폴로지 (`mq/topology.py`, `declare()` 한 번으로 멱등 선언)
 
 ```mermaid

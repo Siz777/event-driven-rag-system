@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "incident-rag": {
+      "command": "/opt/miniconda3/envs/rag/bin/python",
+      "args": ["-m", "mcp_server.server"],
+      "env": {"MCP_WARMUP": "1"}
+    }
+  }
+}
