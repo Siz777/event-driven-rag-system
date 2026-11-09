@@ -14,4 +14,4 @@
 - [x] README 아키텍처(MCP 입구·tool 노드), 결과 표, 일지, GRAPH_TOOLS 기본 on, 커밋·푸시
 
 ## 하지 않는 것
-- MCP 원격 전송(streamable-http)·인증, 도구 2회 이상 연쇄, 집계 도구의 MCP 노출(필요하면 한 줄), 티켓 쓰기 도구
+- MCP 원격 전송(streamable-http)·인증, 도구 2회 이상 연쇄, 티켓 쓰기 도구

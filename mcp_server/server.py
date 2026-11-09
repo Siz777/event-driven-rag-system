@@ -1,4 +1,5 @@
-"""MCP 서버(stdio). Step 11 Day 1 — 큐 미경유 **동기 입구**. 도구 본체는 mcp_server/tools.py, 결정은 docs/events.md §2-c.
+"""MCP 서버(stdio). Step 11 — 큐 미경유 **동기 입구**. 도구 4개(search_tickets · get_ticket · aggregate_tickets · ask_incident),
+본체는 mcp_server/tools.py, 결정은 docs/events.md §2-c.
 
 실행:  python -m mcp_server.server            (Claude Code: 프로젝트 .mcp.json 에 등록돼 있다 → /mcp 로 확인)
 확인:  python -m scripts.mcp_call search_tickets '{"query": "E-5201 알람 처리 사례", "k": 5}'
@@ -27,6 +28,7 @@ INSTRUCTIONS = (
     "반도체 설비 장애 티켓(INC-…) 318건을 검색·조회·질의하는 도구. "
     "search_tickets: 질문/알람 코드/설비명으로 유사 티켓 검색(LLM 없음, 빠름). "
     "get_ticket: 티켓 ID로 원문 1건. "
+    "aggregate_tickets: 원인 ID·설비·알람 코드·기간으로 전체 이력 집계(건수·다운타임 평균/중앙값·최근 발생일·조치 상위, LLM 없음). "
     "ask_incident: 전체 파이프라인(검색→관련성 판정→답변 생성, 15~30초, LLM 호출). status=clarify면 text의 질문을 사용자에게 전달하고 "
     "설비명을 붙여 다시 호출."
 )
@@ -69,6 +71,13 @@ def search_tickets(query: str, k: int = 5, ctx: Context | None = None) -> dict:
 @server.tool(description="티켓 ID(INC-2026-0001 형식)로 원문 1건 조회: 설비·알람·증상·조치 기록·조치 결과·최종 원인·다운타임(분)·날짜.")
 def get_ticket(ticket_id: str, ctx: Context | None = None) -> dict:
     return tools.get_ticket(ticket_id, client=_client(ctx))
+
+
+@server.tool(description="과거 티켓 전체 집계: 건수, 다운타임(분) 평균·중앙값·최소·최대, 최초·최근 발생일, 가장 흔한 조치, 설비 ID별·원인별 건수, "
+                         "최근 티켓 ID. 조건(AND, 하나 이상): cause_id(C01) · equipment_type(PECVD) · equipment_id(PECVD-03) · alarm_code(E-1101) · since(YYYY-MM-DD).")
+def aggregate_tickets(cause_id: str | None = None, equipment_type: str | None = None, equipment_id: str | None = None,
+                      alarm_code: str | None = None, since: str | None = None, ctx: Context | None = None) -> dict:
+    return tools.aggregate(cause_id, equipment_type, equipment_id, alarm_code, since, client=_client(ctx))
 
 
 @server.tool(description="장애 질문에 근거 티켓과 함께 답변(검색→판정→생성, 15~30초). status: answered | no_match | clarify(설비 되묻기, "

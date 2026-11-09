@@ -3,6 +3,8 @@
 도구 3개
 - search_tickets(query, k): hybrid+filter 검색(rag.retrieve.filtered_search). 판정·생성 없음, LLM 호출 0. 적용된 필터(alarm_code·설비)도 돌려준다.
 - get_ticket(ticket_id): 티켓 원문 1건(domains/<domain>/data/tickets.clean.jsonl). 생성 메타(_reverse_pred·gen_model·persona·prompt_version)는 뺀다.
+- aggregate_tickets(cause_id | equipment_type | equipment_id | alarm_code, since): 전체 이력 집계(rag/tools.aggregate_tickets — generate 노드가
+  tool calling으로 부르는 것과 같은 함수). 건수·다운타임·최근 발생일·조치 상위·설비별·원인별. LLM 0.
 - ask_incident(question, allow_clarify): 전체 파이프라인(rag.pipeline.answer = LangGraph retrieve→grade→clarify→generate). 워커와 같은 함수,
   같은 status(answered/no_match/clarify). clarify면 text가 되묻는 질문이고 candidates에 후보 설비 — 호출자(LLM)가 사용자에게 묻고
   설비를 붙여 다시 부르면 된다(워커의 Redis 300s 상태 대신 호출자가 대화를 들고 있다).
@@ -109,3 +111,14 @@ def ask_incident(question: str, allow_clarify: bool = True, *, answer: AnswerFn 
               {"status": out.status, "citations": [c.ticket_id for c in out.citations], "llm_calls": res["llm_calls"],
                "tokens": (res["usage"] or {}).get("total_tokens") if res["usage"] else None}, t0, client)
     return res
+
+
+def aggregate(cause_id: str | None = None, equipment_type: str | None = None, equipment_id: str | None = None,
+              alarm_code: str | None = None, since: str | None = None, *, client: str | None = None) -> dict:
+    from rag.tools import aggregate_tickets
+    t0 = time.monotonic()
+    args = {k: v for k, v in (("cause_id", cause_id), ("equipment_type", equipment_type), ("equipment_id", equipment_id),
+                              ("alarm_code", alarm_code), ("since", since)) if v}
+    out = aggregate_tickets(**args)
+    _log_call("aggregate_tickets", args, {"count": out.get("count"), "error": out.get("error")}, t0, client)
+    return out

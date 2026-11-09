@@ -22,7 +22,7 @@ Python · FastAPI · RabbitMQ · LangGraph · Qdrant · Kiwi/BM25 · Docker Comp
 flowchart LR
   subgraph Ingress["입구 — 비동기(큐) · 동기(MCP)"]
     S[Slack] -->|webhook / socket mode| F[FastAPI]
-    A[에이전트<br/>Claude Code 등] -->|MCP stdio · 큐 미경유| M[mcp_server<br/>search_tickets · get_ticket · ask_incident]
+    A[에이전트<br/>Claude Code 등] -->|MCP stdio · 큐 미경유| M[mcp_server<br/>search_tickets · get_ticket<br/>aggregate_tickets · ask_incident]
   end
   subgraph AsyncCore
     F -->|publish| Q[(RabbitMQ)]
@@ -162,7 +162,7 @@ python -m pytest                         # 유닛 + integration(브로커 없으
 domains/<domain>/        ← 도메인별 교체 단위: catalog, prompts, data, eval, tokenizer.yaml, artifacts/bm25 (gitignore)
 rag/                     ← 도메인을 모르는 코어: embed, index, bm25_index, tokenize, query_parse, retrieve, graph, pipeline, eval
 worker/ adapters/ api/   ← 큐 소비자, Slack Socket Mode·답글, 웹훅 (비동기 입구)
-mcp_server/              ← MCP 서버(stdio, 동기 입구): search_tickets · get_ticket · ask_incident — 큐 없이 rag 직접 호출. .mcp.json으로 Claude Code에 등록
+mcp_server/              ← MCP 서버(stdio, 동기 입구): search_tickets · get_ticket · aggregate_tickets · ask_incident — 큐 없이 rag 직접 호출. .mcp.json으로 Claude Code에 등록
 rag/tools.py             ← LLM 도구: aggregate_tickets(원인·설비·알람 코드별 건수·다운타임·최근·조치 상위). generate 노드가 필요할 때 1회 호출
 scripts/                 ← 데이터 생성·검증·평가셋·노이즈·GitHub 이슈 수집·그래프·되묻기 평가·cross-encoder(build_pairs·train_reranker)·MCP 클라이언트(mcp_call)·집계 평가(eval_tools)
 docs/log/                ← 개발 일지 (결정·실험·막힌 것·한 줄)

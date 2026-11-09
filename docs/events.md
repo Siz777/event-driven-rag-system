@@ -111,7 +111,7 @@ Socket 재전송으로 같은 event_id가 두 번 오면 워커 멱등 가드가
 
 ## 2-c. 입구 셋째: MCP 서버 (`mcp_server/`, Step 11) — 결정: 동기 입구 vs 비동기 입구
 
-`python -m mcp_server.server`(stdio)가 도구 3개를 낸다: `search_tickets`(검색만, LLM 0) · `get_ticket`(원문 1건) · `ask_incident`(전체 그래프 = 워커와 같은 `rag.pipeline.answer`). **큐를 거치지 않는다** — 클라이언트(Claude Code 등 에이전트)가 서버 프로세스를 자식으로 띄우고 요청-응답으로 부른다. 프로젝트 `.mcp.json`에 등록, 호출 로그는 `logs/mcp_calls.jsonl`(클라이언트 이름·인자·ms·결과 요약), 샘플은 docs/experiments/mcp_call_sample.md.
+`python -m mcp_server.server`(stdio)가 도구 4개를 낸다: `search_tickets`(검색만, LLM 0) · `get_ticket`(원문 1건) · `aggregate_tickets`(전체 이력 집계, LLM 0 — generate 노드의 tool과 같은 함수) · `ask_incident`(전체 그래프 = 워커와 같은 `rag.pipeline.answer`). **큐를 거치지 않는다** — 클라이언트(Claude Code 등 에이전트)가 서버 프로세스를 자식으로 띄우고 요청-응답으로 부른다. 프로젝트 `.mcp.json`에 등록, 호출 로그는 `logs/mcp_calls.jsonl`(클라이언트 이름·인자·ms·결과 요약), 샘플은 docs/experiments/mcp_call_sample.md.
 
 | | 비동기 입구 (Slack/HTTP → RabbitMQ → 워커) | 동기 입구 (MCP stdio → rag 직접 호출) |
 |---|---|---|

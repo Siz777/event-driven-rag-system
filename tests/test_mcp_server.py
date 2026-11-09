@@ -61,7 +61,14 @@ def test_ask_incident_maps_outbound_and_trace():
     assert out["event_id"].startswith("mcp-")
 
 
-def test_stdio_round_trip_lists_three_tools():
+def test_aggregate_tool_logs_and_returns_count(call_log):
+    out = tools.aggregate(alarm_code="E-5201", client="t/0")
+    assert out["filter"] == {"alarm_code": "E-5201"} and out["count"] > 0 and "by_cause" in out
+    assert json.loads(call_log.read_text().splitlines()[-1])["tool"] == "aggregate_tickets"
+    assert "error" in tools.aggregate(client="t/0")
+
+
+def test_stdio_round_trip_lists_four_tools():
     """서버를 실제로 띄워(stdio) initialize → tools/list. 모델은 올리지 않는다(MCP_WARMUP=0)."""
     from mcp.client.session import ClientSession
     from mcp.client.stdio import StdioServerParameters, stdio_client
@@ -75,4 +82,4 @@ def test_stdio_round_trip_lists_three_tools():
                 names = sorted(t.name for t in (await s.list_tools()).tools)
                 return init.server_info.name, names
     name, names = asyncio.run(go())
-    assert name == "incident-rag" and names == ["ask_incident", "get_ticket", "search_tickets"]
+    assert name == "incident-rag" and names == ["aggregate_tickets", "ask_incident", "get_ticket", "search_tickets"]
