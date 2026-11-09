@@ -182,6 +182,14 @@ def chat(user: str, system: str = "", model: str | None = None, temperature: flo
          max_attempts: int = 6, *, judge: bool = False, timeout: float | None = None) -> str:
     """judge=True면 심판 제공사(JUDGE_*)로 호출. timeout은 요청 1회의 초 단위 제한(None이면 SDK 기본 10분)."""
     messages = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": user}]
+    return complete(messages, model=model, temperature=temperature, max_attempts=max_attempts, judge=judge, timeout=timeout).content or ""
+
+
+def complete(messages: list[dict], *, model: str | None = None, temperature: float = 0.2, max_attempts: int = 6,
+             judge: bool = False, timeout: float | None = None, tools: list[dict] | None = None, tool_choice: str | dict = "auto"):
+    """chat.completions 1회(재시도 포함) → 응답 message(content·tool_calls). tools를 주면 OpenAI tool calling —
+    호출자가 message.tool_calls를 실행하고 {"role": "tool", "tool_call_id", "content"}를 붙여 다시 부른다(rag/graph.py generate).
+    토큰 계측(track)·예산 가드·429 분류는 chat과 같다."""
     u = _usage.get()
     for attempt in range(max_attempts):
         if judge:
@@ -195,10 +203,13 @@ def chat(user: str, system: str = "", model: str | None = None, temperature: flo
             extra = {"temperature": temperature} if _supports_temperature(m) else {}
             if timeout is not None:
                 extra["timeout"] = timeout
+            if tools:
+                extra["tools"] = tools
+                extra["tool_choice"] = tool_choice
             t0 = time.monotonic()
             resp = cl.chat.completions.create(model=m, messages=messages, **extra)
             _record(u, m, resp, t0)
-            return resp.choices[0].message.content or ""
+            return resp.choices[0].message
         except TokenBudgetExceeded:
             raise
         except RateLimitError as e:                       # 429

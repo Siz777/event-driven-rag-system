@@ -15,3 +15,4 @@ domains/*/eval/noise_results.jsonl
 domains/*/eval/clarify_results*.jsonl
 domains/*/eval/pairs_*.jsonl
 logs/
+domains/*/eval/aggregate_results_*.jsonl

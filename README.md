@@ -20,19 +20,21 @@ Python · FastAPI · RabbitMQ · LangGraph · Qdrant · Kiwi/BM25 · Docker Comp
 
 ```mermaid
 flowchart LR
-  subgraph Ingress
+  subgraph Ingress["입구 — 비동기(큐) · 동기(MCP)"]
     S[Slack] -->|webhook / socket mode| F[FastAPI]
+    A[에이전트<br/>Claude Code 등] -->|MCP stdio · 큐 미경유| M[mcp_server<br/>search_tickets · get_ticket · ask_incident]
   end
   subgraph AsyncCore
     F -->|publish| Q[(RabbitMQ)]
     Q -->|consume| W[Worker · LangGraph]
   end
-  subgraph Retrieval["Retrieval · LangGraph (retrieve → grade → clarify | generate | no_answer)"]
-    W --> P[query parse<br/>코드·설비 필터] --> E[Embedding] --> V[(Qdrant)]
+  subgraph Retrieval["Retrieval · LangGraph (retrieve → grade → clarify | generate(+tool) | no_answer)"]
+    W & M --> P[query parse<br/>코드·설비 필터] --> E[Embedding] --> V[(Qdrant)]
     P --> B[BM25 · Kiwi 사전]
-    V & B -->|RRF| G{grade<br/>cosine ≥ 0.50 · LLM yes/no ≥ 2}
-    G -->|pass · 설비 1종| L[LLM 생성 + 인용 검증] --> R[Slack reply]
-    G -->|pass · 설비 2종+ · 질의에 설비 없음| C[설비 되묻기<br/>스레드 답 → 재검색 1회] --> R
+    V & B -->|RRF| G{grade<br/>cosine ≥ 0.50 · LLM yes/no ≥ 2<br/>또는 로컬 cross-encoder}
+    G -->|pass · 설비 1종| L[LLM 생성 + 인용 검증] --> R[Slack reply / MCP 응답]
+    L -.->|집계 질문이면 tool call 1회| T[aggregate_tickets<br/>건수·다운타임·최근·조치 상위] -.-> L
+    G -->|pass · 설비 2종+ · 질의에 설비 없음| C[설비 되묻기<br/>스레드 답 → 재검색 1회 / MCP는 호출자가 답] --> R
     G -->|no_answer| N[유사 이력 없음 + 참고 1건] --> R
   end
 ```
@@ -50,6 +52,18 @@ R@5는 벡터 only에서 이미 0.885라 하이브리드로 변하지 않는다 
 | 하이브리드 + 메타데이터 필터 | **0.789 / 0.842** | **5/5 · 5/5 · 5/5** | **0.791 / 0.885 / 0.665** | — | |
 | + negative grade (LangGraph) | 검색 동일 | 검색 동일 | R@5 0.885 유지 (판정이 거른 정답 0) | **0.968** · positive 오판 0.014 · LLM 5.67회/질의 · 지연 16.3s(+4.7s) | |
 | + 설비 되묻기 (LangGraph Step 9, 11-03) | 현실 문체 124행: R@5 0.75 → **0.831**, R@1 0.492 → 0.581 (되묻기에 사용자가 정답 설비로 답했을 때 · 상한 0.871) | 발동 0 (코드·설비 질의는 묻지 않음) | 170행 표는 변동 없음(발동은 설비 없는 증상 질의만) | 발동 0/39 (grade 뒤라 "이력 없음" 유지) · 발동 44/124 · 발동 건 LLM 11회 | |
+
+**Step 11 — tool calling (집계 도구) · 95행(multi_hop 30 · 조치·시간 23 · 과거 이력 12 · exact 대조 30), 정답 = 정답 원인 기준 전체 이력 집계(건수·평균/중앙 다운타임·최근 발생일), 11-09**
+
+| | 도구 off | 도구 on (`GRAPH_TOOLS=1`, 기본) |
+|---|---|---|
+| multi_hop 30 — 숫자 하나라도 맞음 (건수 / 다운타임 / 최근) | 0.233 (0 / 0 / 0.233) | **0.567** (0.5 / 0.333 / 0.267) |
+| multi_hop 도구 호출 / 호출했을 때 도구 숫자를 그대로 씀 / 필터가 정답 원인 | 0 | 20/30 · **0.85** · 0.6 (나머지는 설비·알람 단위로 더 넓게 집계 — 숫자는 맞고 질문의 단위가 다름) |
+| 대조군(exact 30 · 조치·시간 23 · 과거 이력 12) 오호출 | 0 | **0/65** |
+| 인용 R@5 (전체 95) | 0.716 | 0.716 (검색·판정 불변) |
+| LLM 호출 / 토큰 / 비용 / 지연 (전체 95) | 5.76 / 7,157 / $0.0071 / 21.4s | 5.98 / 8,305 / $0.0079 / 23.7s (multi_hop만 +2,473 토큰 · +5.8s) |
+
+도구를 안 부른 multi_hop 10건은 질문이 "증상 묶음의 원인별 분포"처럼 집계 축이 티켓에 없는 것들 — 도구 스키마(원인·설비·알람·기간)로는 못 자르는 질문이라 모델이 상위 5건으로 답했다. 집계 입구는 MCP(`search_tickets`→`get_ticket`)로도 열려 있어 에이전트가 직접 세어도 된다.
 
 **현실 문체 질의 124건(사람 10 · ChatGPT 초안 95 · Claude 초안 19)** — 11-03, 283행 평가셋 기준(negative 39 별도). 사람 10 = 사용자가 직접 쓴 줄(`#human`), ChatGPT 초안 = 사용자가 7개 유형(설비 생략·구어/오타·맥락 노이즈·코드·복합 증상·조치/시간·과거 이력)으로 추가한 108줄 중 positive 95, Claude 초안 = 1주차 19줄.
 
@@ -147,8 +161,10 @@ python -m pytest                         # 유닛 + integration(브로커 없으
 ```
 domains/<domain>/        ← 도메인별 교체 단위: catalog, prompts, data, eval, tokenizer.yaml, artifacts/bm25 (gitignore)
 rag/                     ← 도메인을 모르는 코어: embed, index, bm25_index, tokenize, query_parse, retrieve, graph, pipeline, eval
-worker/ adapters/ api/   ← 큐 소비자, Slack Socket Mode·답글, 웹훅
-scripts/                 ← 데이터 생성·검증·평가셋·노이즈·GitHub 이슈 수집·그래프·되묻기 평가·cross-encoder 쌍(build_pairs)
+worker/ adapters/ api/   ← 큐 소비자, Slack Socket Mode·답글, 웹훅 (비동기 입구)
+mcp_server/              ← MCP 서버(stdio, 동기 입구): search_tickets · get_ticket · ask_incident — 큐 없이 rag 직접 호출. .mcp.json으로 Claude Code에 등록
+rag/tools.py             ← LLM 도구: aggregate_tickets(원인·설비·알람 코드별 건수·다운타임·최근·조치 상위). generate 노드가 필요할 때 1회 호출
+scripts/                 ← 데이터 생성·검증·평가셋·노이즈·GitHub 이슈 수집·그래프·되묻기 평가·cross-encoder(build_pairs·train_reranker)·MCP 클라이언트(mcp_call)·집계 평가(eval_tools)
 docs/log/                ← 개발 일지 (결정·실험·막힌 것·한 줄)
 ```
 
@@ -159,6 +175,7 @@ docs/log/                ← 개발 일지 (결정·실험·막힌 것·한 줄)
 | 1주차 검색 기준선 | 5일 | 4일 (10-26 ~ 10-29) | 합성 티켓 318건, 평가셋 170행, Recall@5 0.885 — docs/experiments/week1_summary.md |
 | 2주차 이벤트 경로 | 5일 | 1일 (10-29) | Slack → RabbitMQ → 워커 → Slack 왕복 18.6~21.8s, 컨테이너 6개, 테스트 84 — docs/week2_summary.md |
 | 3주차 하이브리드·평가 | 5일 | 2일 (11-02 ~ 11-03, Step 0~8) | BM25·RRF·메타데이터 라우팅·LangGraph grade(negative 0.968), GitHub 교차 검증, 노이즈 주입, 데모 GIF, 테스트 86 유닛 + 11 통합 — docs/experiments/week3_summary.md |
+| 4주차 Step 11 MCP·Tool Calling | 2일 | 1일 (11-09) | MCP stdio 입구(도구 3, Claude Code 클라이언트 로그), 집계 도구 + generate tool calling(multi_hop 숫자 정확도 0.23 → 0.57, 오호출 0) — docs/log/2026-11-09.md |
 
 ## 데이터 경계 (무엇이 어디로 나가는가)
 

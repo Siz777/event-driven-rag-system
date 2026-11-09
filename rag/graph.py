@@ -22,10 +22,15 @@ INFO 로그("llm usage …")에 남긴다 — 워커 로그에서 질의별 비�
 GRADE_MODE(판정 백엔드): api = per_doc(기본, 티켓별 API 호출) | batch(k건 1호출) | cross_encoder(로컬 cross-encoder, rag/reranker.py —
 판정의 외부 전송 0회·LLM 호출 0. 11-04 Step 10: scripts/build_pairs.py → scripts/train_reranker.py로 고른 모델 + 임계값)
 | two_stage(cross-encoder 점수가 band [lo, hi] 밖이면 로컬 확정, 안이면 그 티켓만 API 판정 — 외부 전송은 애매한 티켓만).
+
+GRAPH_TOOLS=1(Step 11 Day 2): generate가 OpenAI tool calling으로 rag/tools.aggregate_tickets를 **필요할 때 1회** 부른다 —
+"얼마나 자주·평균 복구 시간·가장 최근·어느 설비" 같은 집계 질문은 상위 5건만으로 답할 수 없어서. 도구를 안 부르면 호출 수 그대로(생성 1회),
+부르면 생성 2회(도구 결정 + 결과 반영). 집계 결과의 recent_ticket_ids도 인용 대상(DB 행이므로 근거다).
 """
 from __future__ import annotations
 
 import contextvars
+import json
 import logging
 import os
 import re
@@ -51,6 +56,7 @@ GRADE_MODES = ("api", "per_doc", "batch", "cross_encoder", "two_stage")
 LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "90"))
 GRADE_TIMEOUT = float(os.getenv("GRADE_TIMEOUT", "30"))
 CLARIFY = os.getenv("GRAPH_CLARIFY", "1") == "1"       # 설비 되묻기 on/off(평가 비교용)
+TOOLS = os.getenv("GRAPH_TOOLS", "1") == "1"           # generate의 집계 도구 호출 on/off. 기본 on(11-09 평가: 오호출 0/65, multi_hop 숫자 정확도 0.23 → 0.57, 토큰 +16%)
 NO_MATCH = "유사 이력 없음"
 _CITE = re.compile(r"INC-\d{4}-\d{4}")   # 대괄호 안 묶음 인용([INC-a, INC-b])도 잡히게 ID 자체를 찾는다
 
@@ -75,6 +81,14 @@ SYSTEM = """<role>
 </output>
 
 티켓에 없는 내용은 추정하지 말고, 관련 티켓이 없으면 '유사 이력 없음'이라고 답하라."""
+
+TOOLS_NOTE = """
+
+<tools>
+집계 도구 aggregate_tickets가 있다. 발생 빈도·평균/중앙값 복구 시간(다운타임)·최근 발생일·설비별 분포·가장 흔한 조치처럼 [과거 티켓] 몇 건으로는
+답할 수 없는 "이력 종합" 질문에만 1회 부른다. 조건은 [과거 티켓]에 적힌 원인 ID(Cxx)·설비 타입·알람 코드로 준다. 단순 유사 사례·조치 순서 질문에는 부르지 않는다.
+도구 결과를 쓸 때는 숫자를 그대로 쓰고 "전체 이력 N건 기준"이라고 밝힌다. 결과의 recent_ticket_ids는 [INC-xxxx]로 인용할 수 있다.
+</tools>"""
 
 GRADE_SYSTEM = """<role>
 반도체 설비 장애 이력 검색 결과의 관련성 심판.
@@ -108,6 +122,8 @@ GradeFn = Callable[[str, Hit], bool]
 GradeBatchFn = Callable[[str, list[Hit]], list[bool]]
 GradeCrossFn = Callable[[str, list[Hit]], list[bool]]
 ScoresFn = Callable[[str, list[Hit]], list[float]]
+ToolChatFn = Callable[[list[dict], list[dict] | None], object]   # (messages, tools) → message(.content, .tool_calls)
+ToolExecFn = Callable[[str, str], dict]
 
 
 class State(TypedDict, total=False):
@@ -123,6 +139,7 @@ class State(TypedDict, total=False):
     candidates: list[str]      # 되묻기 후보 설비(발동 시)
     cross_scores: list[float]  # two_stage: 리랭커 점수
     ambiguous: int             # two_stage: API로 넘긴 티켓 수
+    tool_calls: list[dict]     # generate의 도구 호출 기록 [{name, args, result 요약}]
     text: str
     citations: list[Citation]
     status: str
@@ -139,6 +156,16 @@ def default_search(query: str, k: int) -> list[Hit]:
 def default_chat(user: str, system: str) -> str:
     from .llm import chat
     return chat(user, system, timeout=LLM_TIMEOUT, max_attempts=2)   # 재시도는 워커의 retry 티어가 담당
+
+
+def default_tool_chat(messages: list[dict], tools: list[dict] | None):
+    from .llm import complete
+    return complete(messages, tools=tools, timeout=LLM_TIMEOUT, max_attempts=2)
+
+
+def default_tool_exec(name: str, arguments: str) -> dict:
+    from .tools import run_tool
+    return run_tool(name, arguments)
 
 
 def default_grade(question: str, hit: Hit) -> bool:
@@ -186,7 +213,8 @@ def _sim(h: Hit) -> str:
 
 
 def build_context(hits: list[Hit]) -> str:
-    return "\n\n".join(f"[{h.ticket_id}]{_sim(h)}\n{h.payload['_text']}\n최종 원인: {h.payload['root_cause']}" for h in hits)
+    return "\n\n".join(f"[{h.ticket_id}]{_sim(h)}\n{h.payload['_text']}\n최종 원인: {h.payload['root_cause']}"
+                       + (f" (원인 ID {h.payload['cause_id']})" if h.payload.get("cause_id") else "") for h in hits)
 
 
 def no_answer_text(k: int, hits: list[Hit]) -> str:
@@ -205,7 +233,8 @@ def build_graph(*, search: SearchFn = default_search, chat: ChatFn = default_cha
                 grade_batch: GradeBatchFn = default_grade_batch, grade_cross: GradeCrossFn = default_grade_cross_encoder,
                 cross_scores: ScoresFn = default_scores_cross_encoder, band: tuple[float, float] | None = None,
                 grade_mode: str = GRADE_MODE, min_cosine: float = MIN_COSINE, min_yes: int = MIN_YES, parallel: int = 5,
-                clarify: bool = CLARIFY):
+                clarify: bool = CLARIFY, tools: bool = TOOLS, tool_chat: ToolChatFn = default_tool_chat,
+                tool_exec: ToolExecFn = default_tool_exec):
     if grade_mode not in GRADE_MODES:
         raise ValueError(f"unknown GRADE_MODE: {grade_mode} (expected one of {GRADE_MODES})")
     if grade_mode == "api":
@@ -279,14 +308,48 @@ def build_graph(*, search: SearchFn = default_search, chat: ChatFn = default_cha
         t0 = time.monotonic()
         kept = st["kept"]
         user = f"[질문]\n{st['question']}\n\n[과거 티켓]\n{build_context(kept)}"
-        text = chat(user, SYSTEM.format(k=st["k"])).strip()
+        system = SYSTEM.format(k=st["k"])
+        calls, tool_recs, extra_ids = 0, [], []
+        if tools:
+            from .tools import TOOL_SPEC
+            messages = [{"role": "system", "content": system + TOOLS_NOTE}, {"role": "user", "content": user}]
+            msg = tool_chat(messages, [TOOL_SPEC])
+            calls += 1
+            tcs = list(getattr(msg, "tool_calls", None) or [])
+            if tcs:
+                tc = tcs[0]                               # 1회만 — 두 번째 이후 호출은 무시(비용 상한)
+                result = tool_exec(tc.function.name, tc.function.arguments)
+                try:
+                    args = json.loads(tc.function.arguments) if isinstance(tc.function.arguments, str) else dict(tc.function.arguments)
+                except (json.JSONDecodeError, TypeError):
+                    args = {"_raw": str(tc.function.arguments)[:200]}
+                dm = result.get("downtime_min") or {}
+                tool_recs.append({"name": tc.function.name, "args": args, "count": result.get("count"), "error": result.get("error"),
+                                  "mean": dm.get("mean"), "median": dm.get("median"), "last_seen": result.get("last_seen"),
+                                  "recent": (result.get("recent_ticket_ids") or [None])[0], "ignored_calls": len(tcs) - 1})
+                extra_ids = list(result.get("recent_ticket_ids") or [])
+                messages.append({"role": "assistant", "content": msg.content or None,
+                                 "tool_calls": [{"id": tc.id, "type": "function",
+                                                 "function": {"name": tc.function.name, "arguments": tc.function.arguments}}]})
+                messages.append({"role": "tool", "tool_call_id": tc.id, "content": json.dumps(result, ensure_ascii=False)})
+                msg = tool_chat(messages, None)
+                calls += 1
+            text = (msg.content or "").strip()
+        else:
+            text = chat(user, system).strip()
+            calls = 1
         by_id = {h.ticket_id: h for h in kept}
         cited: list[Citation] = []
         for tid in _CITE.findall(text):
-            if tid in by_id and tid not in {c.ticket_id for c in cited}:
+            if tid in {c.ticket_id for c in cited}:
+                continue
+            if tid in by_id:
                 c = by_id[tid].cosine
                 cited.append(Citation(ticket_id=tid, score=round(c, 4) if c is not None else None))
-        out = {"llm_calls": st["llm_calls"] + 1, "timings": {**st["timings"], "generate": time.monotonic() - t0}}
+            elif tid in extra_ids:                        # 집계 결과의 최근 티켓 — DB 행이라 근거로 인정
+                cited.append(Citation(ticket_id=tid, score=None))
+        out = {"llm_calls": st["llm_calls"] + calls, "tool_calls": tool_recs,
+               "timings": {**st["timings"], "generate": time.monotonic() - t0}}
         if not cited:                                     # 후검증: 인용 0건 → no_answer (근거 없는 답은 내보내지 않는다)
             return {**out, "gate": "no_citation", "status": "no_match", "citations": [],
                     "text": no_answer_text(st["k"], st["hits"])}
@@ -324,7 +387,7 @@ def run(inbound: InboundEvent, *, k: int = config.TOP_K, trace: dict | None = No
                       "hits": [h.ticket_id for h in st.get("hits", [])], "graded": st.get("graded", []),
                       "kept": [h.ticket_id for h in st.get("kept", [])], "llm_calls": st.get("llm_calls", 0),
                       "candidates": st.get("candidates", []), "usage": usage.as_dict(),
-                      "cross_scores": st.get("cross_scores"), "ambiguous": st.get("ambiguous"),
+                      "cross_scores": st.get("cross_scores"), "ambiguous": st.get("ambiguous"), "tool_calls": st.get("tool_calls", []),
                       "timings": {**st.get("timings", {}), "total": total}, "status": st["status"]})
     if not st.get("hits"):
         return inbound.reply(NO_MATCH, status="no_match")
