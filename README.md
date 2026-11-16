@@ -1,50 +1,55 @@
 # Event-Driven RAG System
 
-슬랙에서 "이 장애 전에도 있었어?"라고 물으면, 과거 장애 이력을 검색해 근거 티켓과 함께 답하는 이벤트 기반 RAG 시스템.
-
-![demo](docs/demo.gif)
-
-실시간 녹화 25.3초(앞 0.7초 로딩 화면 트림) · 질문→답변 19.4초(로그 기준). CMP-02 · E-5201 질문 → "검색 중…" → 근거 티켓 2건 답변(Slack 스레드 패널).
-
-<details>
-<summary>두 번째 데모 — 설비 되묻기 (51초, 펼치기)</summary>
-
-![demo: 설비 되묻기](docs/demo_clarify.gif)
-
-설비 되묻기: 설비명 없는 질문 → 후보 3개 제시 → 답변 후 재검색 (실시간 51초 · 되묻기까지 6.9초, 답변까지 25.6초 — 로그 기준). "챔버 진공이 계속 떨어지는데" → PECVD / PVD / ETCH 후보 → "PECVD-03" 답 → PECVD 근거 티켓 4건.
-</details>
+Slack에서 "이 장애가 이전에도 발생했나요?"라고 질문하면 과거 장애 이력을 검색하고, 근거 티켓과 함께 답변하는 이벤트 기반 RAG 시스템입니다.
 
 Python · FastAPI · RabbitMQ · LangGraph · Qdrant · Kiwi/BM25 · Docker Compose
+
+## 데모
+
+![Slack에서 CMP-02 E-5201을 질문하면 스레드에 근거 티켓 2건과 함께 답변이 달린다](docs/demo.gif)
+
+질문 → "검색 중…" → 근거 티켓 2건과 함께 스레드 답변. 질문부터 답변까지 19.4초(로그 기준, 녹화 25.3초).
+
+<details>
+<summary>설비명이 없는 질문은 먼저 되묻는다 (두 번째 데모, 51초)</summary>
+
+<br>
+
+![질문에 설비명이 없으면 후보 3개를 제시하고, 사용자가 고르면 재검색한다](docs/demo_clarify.gif)
+
+"챔버 진공이 계속 떨어지는데"처럼 설비가 없는 질문은 후보 설비 3개(PECVD / PVD / ETCH)를 먼저 묻고, 사용자가 "PECVD-03"을 고르면 해당 설비로 재검색해 근거 티켓 4건을 답합니다. 되묻기까지 6.9초, 최종 답변까지 25.6초.
+</details>
 
 ## 아키텍처
 
 ```mermaid
 flowchart LR
-  subgraph Ingress["입구 — 비동기(큐) · 동기(MCP)"]
-    S[Slack] -->|webhook / socket mode| F[FastAPI]
-    A[에이전트<br/>Claude Code 등] -->|MCP stdio · 큐 미경유| M[mcp_server<br/>search_tickets · get_ticket<br/>aggregate_tickets · ask_incident]
-  end
-  subgraph AsyncCore
-    F -->|publish| Q[(RabbitMQ)]
-    Q -->|consume| W[Worker · LangGraph]
-  end
-  subgraph Retrieval["Retrieval · LangGraph (retrieve → grade → clarify | generate(+tool) | no_answer)"]
-    W & M --> P[query parse<br/>코드·설비 필터] --> E[Embedding] --> V[(Qdrant)]
-    P --> B[BM25 · Kiwi 사전]
-    V & B -->|RRF| G{grade<br/>cosine ≥ 0.50 · LLM yes/no ≥ 2<br/>또는 로컬 cross-encoder}
-    G -->|pass · 설비 1종| L[LLM 생성 + 인용 검증] --> R[Slack reply / MCP 응답]
-    L -.->|집계 질문이면 tool call 1회| T[aggregate_tickets<br/>건수·다운타임·최근·조치 상위] -.-> L
-    G -->|pass · 설비 2종+ · 질의에 설비 없음| C[설비 되묻기<br/>스레드 답 → 재검색 1회 / MCP는 호출자가 답] --> R
-    G -->|no_answer| N[유사 이력 없음 + 참고 1건] --> R
-  end
+  S["Slack"] --> F["FastAPI"]
+  A["에이전트 (Claude Code)"] -- "MCP, 큐 미경유" --> M["mcp_server"]
+  F -- "publish" --> Q[("RabbitMQ")]
+  Q -- "consume" --> W["Worker"]
+  W --> R["검색: 벡터, BM25, RRF"]
+  M --> R
+  R --> G{"판정"}
+  G -- "통과" --> L["답변 생성, 인용 검증"]
+  G -- "설비 미확정" --> C["설비 되묻기"]
+  G -- "이력 없음" --> N["없음, 참고 1건"]
+  L --> O["Slack / MCP 응답"]
+  C --> O
+  N --> O
 ```
+
+입구가 둘(Slack은 큐를 거치는 비동기, MCP는 큐 없이 같은 코어를 직접 호출하는 동기)이고 본체는 하나입니다. 판정 조건(cosine 안전선 0.50 + LLM 티켓별 yes/no 5건 중 2건, 또는 로컬 cross-encoder), 재시도·DLQ 경로, 집계 도구 호출은 아래 [설계 결정](#설계-결정)과 `docs/events.md`에 있습니다.
 
 ## 결과
 
-합성 티켓 318건 · 평가셋 170행(positive 139 + negative 31) · k=5 · 같은 색인(bge-m3). 전 행은 `domains/manufacturing/eval/experiments.jsonl`, 요약은 docs/experiments/week3_summary.md. (11-03에 사용자가 질의 108행을 더 써서 283행(human 124 = #human 10 + 사용자 추가 초안 114, negative 39)으로 재평가 — 소표는 아래. 숫자는 docs/log/2026-11-02.md. 메인 표는 170행 기준.)
-R@5는 벡터 only에서 이미 0.885라 하이브리드로 변하지 않는다 — 보는 지표는 **R@1·MRR**과 negative 처리율.
+합성 티켓 318건을 대상으로 평가했습니다. 기본 평가셋은 positive 139건과 negative 31건을 포함한 170행이며, 검색 결과는 k=5로 측정했습니다. 모든 검색 방식에 동일한 bge-m3 색인을 사용했습니다. 전체 결과는 `domains/manufacturing/eval/experiments.jsonl`, 요약은 `docs/experiments/week3_summary.md`에서 확인할 수 있습니다.
 
-| 검색 방식 | human R@1 / MRR | 코드 질의 3종 (5건 중) | overall R@1 / R@5 / MRR | negative "이력 없음" (31건) |
+11월 3일에는 질의 108행을 추가해 총 283행(현실 문체 질의 124건, negative 39건 별도)으로 재평가했습니다. 해당 결과는 아래 별도 표에 정리했으며, 주요 수치는 `docs/log/2026-11-02.md`를 기준으로 했습니다. 첫 번째 비교 표는 기존 170행 평가셋 기준입니다.
+
+벡터 검색만으로도 R@5가 0.885를 기록해 하이브리드 검색 적용 후에도 변화가 없었습니다. 따라서 R@1, MRR 및 Negative 판정률을 주요 비교 지표로 확인했습니다.
+
+| 검색 방식 | 직접 작성 질의 R@1 / MRR | 코드 질의 3종 (5건 중) | 전체 R@1 / R@5 / MRR | negative "이력 없음" (31건) |
 |---|---|---|---|---|
 | 벡터 only | 0.632 / 0.724 | 0 · 1 · 5 | 0.763 / 0.885 / 0.636 | — |
 | BM25 only (Kiwi, 사전 80) | 0.684 / 0.784 | 5 · 5 · 5 | 0.727 / 0.856 / 0.613 | — |
@@ -53,10 +58,10 @@ R@5는 벡터 only에서 이미 0.885라 하이브리드로 변하지 않는다 
 | + negative grade (LangGraph) | 검색 동일 | 검색 동일 | R@5 0.885 유지 (판정이 거른 정답 0) | **0.968** · positive 오판 0.014 · LLM 5.67회/질의 · +4.7s |
 | + 설비 되묻기 (Step 9) | 124행 R@5 0.75 → **0.831** · R@1 0.492 → 0.581 | 발동 0 | 170행 불변 | 발동 0/39 |
 
-- 코드 질의 3종 = "E-1101" · "PECVD-03 E-1101" · "E-5201" 각 5건 중 적중 수. 되묻기 행은 현실 문체 124행에서 사용자가 정답 설비로 답했을 때(상한 0.871, 발동 44/124, 발동 건 LLM 11회), 코드·설비가 있는 질의는 묻지 않는다.
-- GitHub 이슈(docker/compose 중복 46쌍, 코퍼스 2,600, R@5 [95% CI]): 벡터 0.630 [0.478, 0.761] · BM25 0.609 [0.478, 0.739] (영문 토크나이저: 어간·불용어·식별자) · **하이브리드 0.783** [0.652, 0.891] — 방향은 합성과 같고 n=46이라 CI가 겹친다.
+- 코드 질의 3종은 "E-1101" · "PECVD-03 E-1101" · "E-5201"이며, 각 질의 5건 중 검색된 정답 수를 표시했습니다. 되묻기 결과는 현실 문체 질의 124건에서 사용자가 정답 설비를 선택한 경우입니다. 이때 R@5 상한은 0.871이며, 되묻기는 44/124건에서 발동했습니다. 발동한 질의의 LLM 호출은 11회였습니다. 코드 또는 설비 정보가 포함된 질의에는 되묻기가 적용되지 않습니다.
+- GitHub 이슈 평가에서는 docker/compose 관련 중복 이슈 46쌍과 코퍼스 2,600건을 사용했습니다. R@5는 벡터 검색 0.630 [0.478, 0.761], BM25 0.609 [0.478, 0.739], **하이브리드 0.783** [0.652, 0.891]입니다. 영문 토크나이저에는 어간 처리, 불용어 제거, 식별자 보존을 적용했습니다. 평가 표본이 46쌍으로 적어 신뢰구간이 겹치므로 결과 해석에 유의해야 합니다.
 
-**Step 11 — tool calling (집계 도구) · 95행(multi_hop 30 · 조치·시간 23 · 과거 이력 12 · exact 대조 30), 정답 = 정답 원인 기준 전체 이력 집계(건수·평균/중앙 다운타임·최근 발생일), 11-09**
+**Step 11 — 도구 호출 평가(집계 도구) · 95행(multi_hop 30 · 조치·시간 23 · 과거 이력 12 · exact 대조 30), 정답 = 정답 원인 기준 전체 이력 집계(건수·평균/중앙 다운타임·최근 발생일), 11-09**
 
 | | 도구 off | 도구 on (`GRAPH_TOOLS=1`, 기본) |
 |---|---|---|
@@ -66,9 +71,9 @@ R@5는 벡터 only에서 이미 0.885라 하이브리드로 변하지 않는다 
 | 인용 R@5 (전체 95) | 0.716 | 0.716 (검색·판정 불변) |
 | LLM 호출 / 토큰 / 비용 / 지연 (전체 95) | 5.76 / 7,157 / $0.0071 / 21.4s | 5.98 / 8,305 / $0.0079 / 23.7s (multi_hop만 +2,473 토큰 · +5.8s) |
 
-도구를 안 부른 multi_hop 10건은 질문이 "증상 묶음의 원인별 분포"처럼 집계 축이 티켓에 없는 것들 — 도구 스키마(원인·설비·알람·기간)로는 못 자르는 질문이라 모델이 상위 5건으로 답했다. 집계 입구는 MCP(`search_tickets`→`get_ticket`)로도 열려 있어 에이전트가 직접 세어도 된다.
+도구를 호출하지 않은 multi_hop 10건은 "증상 묶음의 원인별 분포"처럼 티켓에 집계 기준이 없는 질문이었습니다. 현재 도구는 원인·설비·알람·기간을 기준으로 집계하므로 이러한 질문에는 적용할 수 없으며, 모델이 검색 상위 5건을 바탕으로 답변했습니다. MCP의 `search_tickets`와 `get_ticket`을 통해 에이전트가 직접 집계하는 경로도 제공합니다.
 
-**현실 문체 질의 124건(사람 10 · ChatGPT 초안 95 · Claude 초안 19)** — 11-03, 283행 평가셋 기준(negative 39 별도). 사람 10 = 사용자가 직접 쓴 줄(`#human`), ChatGPT 초안 = 사용자가 7개 유형(설비 생략·구어/오타·맥락 노이즈·코드·복합 증상·조치/시간·과거 이력)으로 추가한 108줄 중 positive 95, Claude 초안 = 1주차 19줄.
+**현실 문체 질의 124건(직접 작성 10 · ChatGPT 초안 95 · Claude 초안 19)** — 11-03, 283행 평가셋 기준(negative 39 별도). 사람 10 = 사용자가 직접 쓴 줄(`#human`), ChatGPT 초안 = 사용자가 7개 유형(설비 생략·구어/오타·맥락 노이즈·코드·복합 증상·조치/시간·과거 이력)으로 추가한 108줄 중 positive 95, Claude 초안 = 1주차 19줄.
 
 | 검색 방식 | 124 R@1 / R@5 / MRR | 사람 10 R@5 | ChatGPT 초안 95 R@5 | Claude 초안 19 R@5 |
 |---|---|---|---|---|
@@ -88,26 +93,26 @@ R@5는 벡터 only에서 이미 0.885라 하이브리드로 변하지 않는다 
 
 ## 설계 결정
 
-<!-- 각 3줄 이내. docs/log/ 의 "결정" 칸에서 가져온다. -->
-- **RabbitMQ (Kafka 대신)** — 작업 큐 문제이고 DLQ·재시도가 내장. 처리량이 아니라 공정 분배와 유실 방지가 요구사항.
-- **원인 카탈로그 → 합성 티켓** — LLM 보조로 초안을 작성하고 학부 반도체 공정 지식으로 검토한 가상 카탈로그(검토 범위는 docs/catalog_review.md). root_cause는 사람이 고정, LLM은 표현만 생성. 역분류 검증(2심 + 사람 판정, docs/labeling_policy.md)으로 라벨 일관성 확보.
-- **RRF 1:1 고정 (가중치 튜닝 안 함)** — 평가셋 170행에 맞추면 과적합. 순위만 쓰므로 cosine·BM25 스케일 차이를 정규화할 필요가 없다. 코드 질의는 섞지 않고 라우팅(코드 → BM25만)으로 푼다.
-- **Kiwi 사용자 사전은 자동 검출** — 카탈로그 구절을 문맥째 분석해 기본 Kiwi가 잘못 쪼개는 단어(베인→베이+ㄴ, 리크→리+크, 미도달→미+도달)만 등록(80개). 전부 올리면 145개가 효과 없는 항목이었다.
-- **"모른다"는 LLM 판정 노드** — cosine 임계값은 negative 9할을 잡으려면 positive 1할을 버린다. 티켓별 yes/no + "5건 중 2건 이상" 규칙으로 negative 0.968·정답 유실 0. 배치 1회 판정은 전 지표 열세로 기각.
-- **설비 되묻기는 grade 뒤에** — 검색 결과만 보면 negative 39건 중 25건이 "설비 혼재"로 되묻기에 걸려 "이력 없음"을 가린다. LLM 판정이 negative를 거른 뒤, 통과 티켓이 설비 2종 이상일 때만 묻는다(LLM 추가 호출 0, 되물은 질의만 판정 2회). 왕복은 스레드당 1회(Redis 300s).
-- **at-least-once + 멱등성 키의 수명** — drain 타임아웃으로 버린 메시지는 브로커가 돌려주지만 멱등 키가 살아 있으면 다음 워커가 중복으로 버린다(유실 창 300s). 버리는 순간 키를 놓게 해 0으로.
+<!-- 각 항목은 3줄 이내로 정리. docs/log/의 "결정" 항목을 기준으로 작성. -->
+- **RabbitMQ (Kafka 대신)** — 이 프로젝트는 대규모 스트리밍보다 작업 분배와 실패 처리에 초점을 둔 작업 큐가 필요했습니다. RabbitMQ의 재시도 및 DLQ 기능이 요구사항에 적합하다고 판단했습니다.
+- **원인 카탈로그 → 합성 티켓** — LLM의 도움으로 초안을 작성한 뒤, 전공 과정에서 학습한 반도체 공정 지식을 바탕으로 가상 카탈로그를 검토했습니다(검토 범위: `docs/catalog_review.md`). `root_cause`는 사람이 지정하고 LLM은 표현 생성에만 활용했습니다. 역분류 검증(2심 + 사람 판정, `docs/labeling_policy.md`)으로 라벨의 일관성을 확인했습니다.
+- **RRF 1:1 고정 (가중치 튜닝 미실시)** — 평가셋 170행에 맞춘 가중치 튜닝은 과적합 가능성이 있다고 판단했습니다. 순위 기반 결합을 사용하므로 cosine과 BM25 점수의 스케일을 별도로 정규화하지 않았습니다. 코드 질의는 하이브리드 검색에 섞지 않고 BM25 검색으로 라우팅했습니다.
+- **Kiwi 사용자 사전 자동 검출** — 카탈로그 문장을 문맥과 함께 분석해 기본 Kiwi가 잘못 분리하는 단어만 등록했습니다(80개). 예를 들어 베인→베이+ㄴ, 리크→리+크, 미도달→미+도달과 같은 사례입니다. 카탈로그 단어를 모두 등록한 경우 145개 항목은 효과가 없었습니다.
+- **LLM 기반 관련성 판정** — cosine 임계값만으로 negative 질의의 90%를 구분하려면 positive 질의 약 10%를 놓치는 문제가 있었습니다. 이를 보완하기 위해 티켓별 yes/no 판정과 "5건 중 2건 이상" 규칙을 적용했습니다. 그 결과 negative 판정률은 0.968이었고 정답 유실은 없었습니다. 배치 1회 판정 방식은 모든 주요 지표에서 성능이 낮아 제외했습니다.
+- **설비 되묻기는 Grade 이후에 실행** — 검색 결과만으로 되묻기를 판단하면 negative 39건 중 25건이 여러 설비가 포함됐다는 이유로 되묻기 대상이 되어 "이력 없음" 판정을 방해했습니다. 먼저 LLM 판정으로 negative를 제외한 뒤, 통과한 티켓에 2종 이상의 설비가 포함된 경우에만 되묻도록 변경했습니다. 이 과정에서 추가 LLM 호출은 발생하지 않으며, 되묻기가 발생한 질의에 대해서만 판정을 2회 수행합니다. 되묻기는 Redis 상태를 이용해 스레드당 1회로 제한했습니다(300초).
+- **At-least-once 처리와 멱등성 키의 수명** — drain 타임아웃으로 처리하지 못한 메시지는 브로커가 재전달하지만, 멱등성 키가 남아 있으면 다음 워커도 해당 메시지를 중복으로 판단해 버리는 문제가 있었습니다(유실 가능 시간 300초). 메시지를 재전달하도록 넘기는 시점에 키를 해제해 이 문제를 해결했습니다.
 
 ## 기각된 실험
 
-| 실험 | 결과 | 왜 기각 |
+| 실험 | 결과 | 제외한 이유 |
 |---|---|---|
-| symptom_only 색인 (증상만, 조치 기록 제외) | overall R@5 0.853 → 0.872, 사람 질의 0.842 → 0.789 | 오른 건 LLM 질의가 출처 티켓 증상을 바꿔 쓴 착시. 사람 질의가 떨어진다 (1주차) |
-| Kiwi 사전 v1 (카탈로그 단어 전부 188개) | v2(잘못 쪼개지는 단어만 80개)와 R@5 0.842 vs 0.856 | 145개는 Kiwi가 이미 한 토큰으로 보는 단어 — 효과 없는 항목. 자동 검출로 교체 |
-| grade 배치 1회 판정 (5건 한 호출) | negative 0.871 · positive 오판 0.072 · 정답 6건 거름 · 20.8s | 호출 수만 1/3, 정확도·지연 전부 열세. 목록 안 상대 비교로 yes가 흔들린다 |
-| RRF 가중치 튜닝 | 하지 않음 | 평가셋 170행에 맞추면 과적합. 코드 질의는 가중치 대신 라우팅으로 |
+| symptom_only 색인 (증상만, 조치 기록 제외) | 전체 R@5 0.853 → 0.872, 사람 질의 0.842 → 0.789 | LLM 질의의 성능 향상은 출처 티켓의 증상을 바꿔 쓴 영향일 가능성이 있습니다. 실제 사람 질의의 성능은 하락해 적용하지 않았습니다(1주차). |
+| Kiwi 사전 v1 (카탈로그 단어 전부 188개) | v2(잘못 분리되는 단어만 80개)와 R@5 0.842 vs 0.856 | 145개 항목은 Kiwi가 이미 하나의 토큰으로 처리해 등록 효과가 없었습니다. 이후 필요한 단어만 자동 검출하는 방식으로 변경했습니다. |
+| Grade 배치 1회 판정 (티켓 5건을 한 번에 호출) | negative 0.871 · positive 오판 0.072 · 정답 6건 제외 · 20.8s | 호출 수는 1/3로 줄었지만 정확도와 지연 시간이 모두 악화됐습니다. 한 번에 전달된 목록 안에서 상대 비교가 발생해 yes 판정이 불안정해지는 문제가 있었습니다. |
+| RRF 가중치 튜닝 | 미실시 | 평가셋 170행에 맞춘 튜닝은 과적합 우려가 있어 진행하지 않았습니다. 코드 질의는 가중치 조정 대신 검색 방식 라우팅으로 처리했습니다. |
 | cross-encoder 학습에 confusable 쌍을 라벨 0으로 포함 (all 변형) | 제외 변형 대비 쌍 AUC 0.931 vs 0.922로 높지만 positive false no_match 0.158 vs 0.070, 정답 유실 2 vs 1 (val 65) | 카탈로그가 "헷갈림"으로 선언한 이웃 원인 티켓을 0으로 가르치면 모델이 이웃까지 버린다 — 정답이 상위 5에 1건뿐인 질의에서 그 이웃이 "5건 중 2 yes"의 두 번째 yes였다. 쌍을 잘 가르는 것과 질의를 살리는 것이 다른 목표 (3주차 Step 10) |
 
-## 신뢰성 (실험으로 확인한 것)
+## 신뢰성 검증
 
 | 상황 | 결과 | 어디에 |
 |---|---|---|
@@ -120,7 +125,7 @@ R@5는 벡터 only에서 이미 0.885라 하이브리드로 변하지 않는다 
 
 ## 실행 (Docker Compose)
 
-전체 경로가 컨테이너 6개로 돈다: `slack`(Socket Mode) 또는 `api`(웹훅) → `rabbitmq` → `worker`(bge-m3 + `qdrant` + LLM) → `ai_results` → `slack`(질문 스레드에 답글). `redis`는 멱등성 키.
+전체 처리 경로는 6개 컨테이너로 구성됩니다: `slack`(Socket Mode) 또는 `api`(웹훅) → `rabbitmq` → `worker`(bge-m3 + `qdrant` + LLM) → `ai_results` → `slack`(질문 스레드에 답글). `redis`는 멱등성 키.
 
 ```bash
 cp .env.example .env                     # LLM_API_KEY, SLACK_BOT_TOKEN(xoxb-), SLACK_APP_TOKEN(xapp-) 입력. 웹훅만 쓰면 SLACK_SIGNING_SECRET (*_URL은 compose가 서비스명으로 덮어씀)
@@ -130,14 +135,14 @@ docker compose run --rm worker python -m rag.index   # 최초 1회: 티켓 318�
 docker compose ps                        # 전부 healthy 확인
 ```
 
-Slack에서 봇을 멘션하면(`@incident-bot 펌프다운이 평소보다 오래 걸리는데`) 스레드에 "검색 중…"이 먼저 달리고, 워커가 답을 만들면 같은 스레드에 근거 티켓과 함께 답글이 달린다. 봇을 채널에 초대해야 하고, 앱에는 Socket Mode·`app_mentions:read`·`chat:write`·`im:history`가 필요하다.
-웹훅 경로도 그대로 있다: Slack 이벤트(또는 서명된 curl)를 `POST http://localhost:8000/events`로 보내면 워커가 답을 `ai_results` 큐에 넣고 `slack`이 전송한다.
-큐 상태는 http://localhost:15672 (guest/guest). 워커 종료는 `docker compose stop worker` — 처리 중인 1건을 끝내고(최대 120초) 나간다.
+Slack에서 봇을 멘션하면(`@incident-bot 펌프다운이 평소보다 오래 걸리는데`) 스레드에 "검색 중…" 메시지가 먼저 표시됩니다. 워커가 답변을 생성하면 같은 스레드에 근거 티켓과 함께 답변이 등록됩니다. 사용 전 봇을 채널에 초대해야 하며, Slack 앱에는 Socket Mode와 `app_mentions:read`·`chat:write`·`im:history` 권한이 필요합니다.
+웹훅 경로도 지원합니다. Slack 이벤트(또는 서명된 curl 요청)를 `POST http://localhost:8000/events`로 보내면 워커가 답변을 `ai_results` 큐에 전달하고, `slack` 어댑터가 이를 전송합니다.
+RabbitMQ 관리 화면은 `http://localhost:15672`에서 확인할 수 있습니다(ID/PW: `guest` / `guest`). 워커는 `docker compose stop worker` 명령으로 종료하며, 처리 중인 작업을 마친 뒤 최대 120초 이내에 종료됩니다.
 
-- 모델 가중치(bge-m3, ~2GB)는 이미지에 넣지 않고 호스트 `~/.cache/huggingface`를 마운트한다. 첫 실행 때 받는다.
-- 판정은 기본 `GRADE_MODE=api`(LLM). 로컬 cross-encoder 판정(`GRADE_MODE=cross_encoder`)을 쓰려면 모델을 먼저 만든다: `python -m scripts.train_reranker train --variant no_confusable --device cpu --max-length 256 && python -m scripts.train_reranker pick` → `domains/manufacturing/artifacts/reranker/best`(gitignore, manifest 사본은 `eval/reranker_manifest.json`). "데이터 경계" 절에 모드 비교표.
-- 티켓 데이터(`domains/*/data/*.jsonl`, gitignore)는 `./domains`를 읽기 전용으로 마운트한다.
-- 큐·실패 경로·멱등성 규칙은 docs/events.md.
+- 모델 가중치(bge-m3, 약 2GB)는 컨테이너 이미지에 포함하지 않고 호스트의 `~/.cache/huggingface`를 마운트합니다. 최초 실행 시 모델을 다운로드합니다.
+- 기본 판정 방식은 `GRADE_MODE=api`(LLM)입니다. 로컬 cross-encoder 판정(`GRADE_MODE=cross_encoder`)을 사용하려면 먼저 모델을 생성해야 합니다: `python -m scripts.train_reranker train --variant no_confusable --device cpu --max-length 256 && python -m scripts.train_reranker pick` → `domains/manufacturing/artifacts/reranker/best`(gitignore, manifest 사본은 `eval/reranker_manifest.json`). "데이터 경계" 절에 모드 비교표.
+- 티켓 데이터(`domains/*/data/*.jsonl`, gitignore)는 `./domains`를 읽기 전용으로 마운트합니다.
+- 큐, 실패 처리 경로 및 멱등성 규칙은 `docs/events.md`에 정리했습니다.
 
 ## 개발용 (로컬 실행)
 
@@ -171,7 +176,7 @@ scripts/                 ← 데이터 생성·검증·평가셋·노이즈·Git
 docs/log/                ← 개발 일지 (결정·실험·막힌 것·한 줄)
 ```
 
-## 계획 대비 실제
+## 개발 계획 대비 진행 결과
 
 | 주차 | 계획 | 실제 | 산출 |
 |---|---|---|---|
@@ -182,7 +187,7 @@ docs/log/                ← 개발 일지 (결정·실험·막힌 것·한 줄)
 
 ## 데이터 경계 (무엇이 어디로 나가는가)
 
-질문 1건이 처리되는 동안 외부로 나가는 것과 로컬에 머무는 것. 기밀 환경이면 "교체 경로"만 바꾸면 된다(코드 변경 없이 환경변수). 기본은 `GRADE_MODE=api`(판정도 LLM) — 정확도 우선. `GRADE_MODE=cross_encoder`는 **비용·보안 우선 모드**: 판정을 로컬 cross-encoder가 하고 티켓 본문은 생성 1회에만 나간다.
+질문 1건을 처리할 때 외부로 전송되는 데이터와 로컬에 저장되는 데이터를 구분했습니다. 기밀 환경에서는 코드를 변경하지 않고 환경변수로 교체 경로를 설정할 수 있습니다. 기본 설정은 정확도를 우선하는 `GRADE_MODE=api`이며, 판정에도 LLM을 사용합니다. `GRADE_MODE=cross_encoder`는 **비용과 보안을 우선하는 모드**로, 판정은 로컬 cross-encoder가 수행하고 티켓 본문은 답변 생성 단계에서만 외부로 전송합니다.
 
 | 전송 지점 | 내용 | 횟수 / 질의 | 측정(11-04, gpt-5-mini) | 교체 경로 |
 |---|---|---|---|---|
@@ -192,9 +197,9 @@ docs/log/                ← 개발 일지 (결정·실험·막힌 것·한 줄)
 | **Hugging Face Hub** | 모델 파일 다운로드만(bge-m3). 데이터는 나가지 않음 | 최초 1회 | — | 미리 받아 두고 `HF_HUB_OFFLINE=1` |
 | GitHub API (`scripts/collect_github_issues.py`) | 공개 이슈 수집(읽기). 실험 전용, 운영 경로 아님 | 0 | — | 안 씀 |
 
-로컬에 머무는 것: 임베딩(bge-m3, 호스트/컨테이너 CPU·MPS), Qdrant(벡터+payload), BM25 색인·Kiwi 사전, RabbitMQ·Redis(이벤트·멱등 키·되묻기 상태), LangGraph 상태, 티켓 원본(`domains/*/data`), 역분류 심판(`JUDGE_BASE_URL`=Ollama qwen2.5:7b — 데이터 생성 단계에서만 씀). 티켓 본문은 grade·generate의 프롬프트로만 외부에 나간다 — 색인 전체가 나가는 일은 없다.
+로컬에 저장되는 데이터: 임베딩(bge-m3, 호스트/컨테이너 CPU·MPS), Qdrant(벡터+payload), BM25 색인·Kiwi 사전, RabbitMQ·Redis(이벤트·멱등 키·되묻기 상태), LangGraph 상태, 티켓 원본(`domains/*/data`), 역분류 심판(`JUDGE_BASE_URL`=Ollama qwen2.5:7b — 데이터 생성 단계에서만 씀). 티켓 본문은 grade·generate의 프롬프트로만 외부에 나간다 — 색인 전체가 나가는 일은 없다.
 
-가드·계측: 질의마다 `rag.llm.track()`이 호출 수·토큰·추정 비용(USD, `PRICE_PER_MTOK`)·LLM 초를 모아 워커 로그 `llm usage calls=6 tokens=3744+3453=7197 llm_sec=53.6 cost=$0.0078`로 남기고(`scripts/eval_graph.py`는 질의당 평균을 집계), `LLM_TOKEN_BUDGET`(질의당 총 토큰, 기본 0=무제한)을 넘기면 다음 호출 전에 실패시킨다 — 되묻기 루프·긴 컨텍스트 폭주 가드. 출력 토큰이 큰 이유: gpt-5-mini의 reasoning 토큰이 completion에 포함된다.
+비용 및 사용량 계측: 질의마다 `rag.llm.track()`이 호출 수·토큰·추정 비용(USD, `PRICE_PER_MTOK`)·LLM 처리 시간을 수집해 워커 로그 `llm usage calls=6 tokens=3744+3453=7197 llm_sec=53.6 cost=$0.0078`로 남기고(`scripts/eval_graph.py`는 질의당 평균을 집계), `LLM_TOKEN_BUDGET`(질의당 총 토큰, 기본 0=무제한)을 넘기면 다음 호출 전에 실패시킨다 — 되묻기 루프·긴 컨텍스트 폭주 가드. 출력 토큰이 큰 이유: gpt-5-mini의 reasoning 토큰이 completion에 포함된다.
 
 **판정 모드 비교** (val 65 질의 = negative 8 · positive 57, 되묻기 off, gpt-5-mini 생성·판정, 3주차 Step 10 · 일지 11-05)
 
@@ -227,18 +232,18 @@ python -m scripts.eval_gate --mode live            # push 전: 검색 139행 재
 python -m scripts.eval_gate --mode live --graph live   # 판정까지 — 비용이 드니 그래프를 건드린 커밋만
 ```
 
-CI(GitHub Actions)는 유닛 테스트(통합 marker 제외, LLM 0) + `eval_gate --mode recorded`. 티켓 데이터·색인·bge-m3가 저장소에 없어서 CI가 검색을 다시 돌리지는 못한다 — "기록값이 기준을 넘는가 + manifest가 깨지지 않았는가"까지가 CI, 검색 재실행은 로컬 pre-push. human 124행(R@5 0.75)은 아직 개선 중이라 게이트 밖(보고만). 게이트 실행 기록은 `eval/gate_results.jsonl`.
+CI(GitHub Actions)는 통합 테스트 marker를 제외한 유닛 테스트(LLM 호출 없음)와 `eval_gate --mode recorded`를 실행합니다. 티켓 데이터, 색인 및 bge-m3 모델은 저장소에 포함되어 있지 않으므로 CI에서 검색을 다시 실행하지는 않습니다. 따라서 CI에서는 기록된 지표가 기준을 충족하는지와 manifest의 유효성을 확인하며, 검색 재실행은 로컬 pre-push 단계에서 수행합니다. 현실 문체 질의 124건(R@5 0.75)은 개선 중이므로 현재 평가 게이트에는 포함하지 않고 별도로 보고합니다. 게이트 실행 기록은 `eval/gate_results.jsonl`에 저장됩니다.
 
-## 한계와 다음 단계
+## 한계와 향후 개선 방향
 
 - paraphrase_hard(용어를 전혀 안 쓴 질의) R@5 0.567 — 어휘 매칭으로 구제되지 않는 임베딩 한계. 개선 대상에서 제외하고 숫자만 보고한다.
 - 현실 문체 질의 124건(R@5 0.75)의 실패 31건 중 약 18건은 증상이 복수 원인에 걸쳐 설비 없이는 미결정(진공 저하·히터 온도는 설비 3종에 같은 증상) — 검색이 아니라 정답 정의(1 cause)의 한계. 설비 되묻기 노드(Step 9)로 사용자가 정답 설비를 답하면 R@5 0.831(상한 0.871, 발동 44/124). 남는 실패 21건 중 17건은 되묻기가 발동하지 않은 같은 설비 안의 confusable(연마 패드 ↔ 컨디셔너·슬러리, O-ring ↔ 드라이펌프) — 설비가 아니라 세부 신호(글레이징·베인 전류)를 되물어야 하고, 그건 미구현. 되묻기는 스레드당 1회, 왕복 1회분 지연과 판정 2회(LLM 11회/질의)가 비용.
 - negative 31건 중 1건은 아직 답한다("센서·커넥터" 어휘 겹침). positive 2건은 잘못 "이력 없음"(검색 자체가 빗나간 1, 집계 답에 인용이 빠진 1).
 - 지연: 판정 추가로 질의당 +4.7s(평균 16.3s, p95 29.0s). 생성 LLM(10.9s)이 대부분, 판정은 병렬이라 더 못 줄인다.
-- 합성 데이터 — 실제 장애 텍스트의 노이즈는 노이즈 주입 실험과 GitHub 이슈 교차 검증으로 보완 (Step 6·7)
-- 알람 코드·설비 ID는 가상 체계
-- 멀티턴 대화 미지원 (thread_id는 스키마에 예약)
+- **합성 데이터:** 실제 장애 이력이 아닌 합성 데이터를 사용했습니다. 실제 텍스트의 특성을 일부 확인하기 위해 노이즈 주입 실험과 GitHub 이슈 교차 검증을 진행했습니다(Step 6·7).
+- **가상 코드 체계:** 알람 코드와 설비 ID는 가상의 체계를 사용했습니다.
+- **멀티턴 대화 미지원:** 현재 멀티턴 대화는 지원하지 않으며, `thread_id`는 스키마에 예약된 상태입니다.
 
 ## 라이선스
 
-MIT — `LICENSE`. 티켓 데이터는 합성(가상 설비·알람 코드 체계)이며 저장소에 포함되지 않는다.
+MIT License — `LICENSE`. 티켓 데이터는 가상의 설비 및 알람 코드 체계를 사용한 합성 데이터이며, 저장소에는 포함되어 있지 않습니다.
