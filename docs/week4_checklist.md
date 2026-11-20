@@ -28,4 +28,4 @@
 - [x] scripts/eval_embed.py: 124행 · negative 39 · 코드 3종 · 170행 × vector / hybrid+filter. 결과 = hybrid+filter R@5 0.750 / 0.750 / 0.734, 차이 없음(±0.03)
 - [x] docs/experiments/step12_embedding.md(표 + 실패 집합 비교 + 결론), 일지 11-20
 - [x] eval_gate 기록 모드가 기준 모델 행만 읽도록 고정(비교 실험 행이 최신이어도 게이트 불변)
-- [ ] README 반영 여부 — 사용자 결정
+- [x] README 설계 결정에 한 줄(bge-m3 유지, 차이 없음) — 표는 넣지 않음
