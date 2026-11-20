@@ -28,7 +28,9 @@ JUDGE_MODEL = os.getenv("JUDGE_MODEL") or LLM_MODEL_SMALL
 JUDGE_MIN_INTERVAL = float(os.getenv("JUDGE_MIN_INTERVAL", "0"))
 
 # 임베딩: sentence-transformers 로컬 모델 (기본 bge-m3, 다국어)
-EMBED_MODEL = os.getenv("EMBED_MODEL", "BAAI/bge-m3")
+DEFAULT_EMBED_MODEL = "BAAI/bge-m3"
+EMBED_MODEL = os.getenv("EMBED_MODEL") or DEFAULT_EMBED_MODEL
+EMBED_DEVICE = os.getenv("EMBED_DEVICE") or None   # 비우면 sentence-transformers 자동(MPS 되면 MPS). MPS 에러 시 cpu
 EMBED_BATCH = int(os.getenv("EMBED_BATCH", "32"))
 
 # 벡터 DB: QDRANT_URL 없으면 로컬 파일 모드 (Docker 불필요)

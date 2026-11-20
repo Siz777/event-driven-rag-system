@@ -21,3 +21,11 @@
 
 ## 하지 않는 것
 - MCP 원격 전송(streamable-http)·인증, 도구 2회 이상 연쇄, 티켓 쓰기 도구
+
+## Step 12 — 임베딩 모델 비교 (11-20, 검색 단독)
+- [x] rag/embed.py: EMBED_MODEL별 질의 프롬프트 분기(Qwen3 instruction은 질의에만), EMBED_DEVICE. 기본 bge-m3 동작 불변(유닛 통과)
+- [x] Qwen3-Embedding-0.6B · KURE-v1 색인(모델별 컬렉션, 기존 bge-m3 컬렉션 불변), 색인 시간·메모리 기록
+- [x] scripts/eval_embed.py: 124행 · negative 39 · 코드 3종 · 170행 × vector / hybrid+filter. 결과 = hybrid+filter R@5 0.750 / 0.750 / 0.734, 차이 없음(±0.03)
+- [x] docs/experiments/step12_embedding.md(표 + 실패 집합 비교 + 결론), 일지 11-20
+- [x] eval_gate 기록 모드가 기준 모델 행만 읽도록 고정(비교 실험 행이 최신이어도 게이트 불변)
+- [ ] README 반영 여부 — 사용자 결정

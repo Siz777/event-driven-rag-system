@@ -37,3 +37,11 @@ def test_manifest_checks(tmp_path):
 def test_thresholds_are_current_minus_0_02():
     assert THRESHOLDS["vector.recall@5"] == ("ge", 0.865) and THRESHOLDS["graph.positive_false_no_match"] == ("le", 0.02)
     assert _ok("ge", 0.865, 0.865) and not _ok("ge", 0.864, 0.865) and _ok("le", 0.02, 0.02) and not _ok("le", 0.021, 0.02)
+
+
+def test_recorded_retrieval_ignores_other_embedding_models():
+    # Step 12 임베딩 비교 행이 최신이어도 게이트는 기준 모델(bge-m3) 행을 읽는다. embed_model 없는 옛 행은 기준으로 본다
+    rows = [{"method": "vector", "by_source": {"llm": {"n": 1, "recall@5": 0.9}}},
+            {"method": "vector", "embed_model": "BAAI/bge-m3", "by_source": {"llm": {"n": 1, "recall@5": 0.8}}},
+            {"method": "vector", "embed_model": "Qwen/Qwen3-Embedding-0.6B", "by_source": {"llm": {"n": 1, "recall@5": 0.1}}}]
+    assert recorded_retrieval(rows)["vector.recall@5"] == 0.8

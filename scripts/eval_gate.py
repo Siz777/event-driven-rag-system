@@ -49,7 +49,9 @@ def weighted_r5(by_source: dict) -> float | None:
 def recorded_retrieval(rows: list[dict]) -> dict[str, float | None]:
     out = {}
     for m in ("vector", "hybrid+filter"):
-        cands = [r for r in rows if r.get("method") == m and r.get("eval_file", "eval.jsonl") == "eval.jsonl" and "by_source" in r]
+        # 기준 모델(bge-m3) 행만 — 임베딩 비교 실험(Step 12) 행이 최신이어도 게이트가 그 숫자를 읽지 않게
+        cands = [r for r in rows if r.get("method") == m and r.get("eval_file", "eval.jsonl") == "eval.jsonl" and "by_source" in r
+                 and r.get("embed_model", config.DEFAULT_EMBED_MODEL) == config.DEFAULT_EMBED_MODEL]
         out[f"{m}.recall@5"] = weighted_r5(cands[-1]["by_source"]) if cands else None
     return out
 
